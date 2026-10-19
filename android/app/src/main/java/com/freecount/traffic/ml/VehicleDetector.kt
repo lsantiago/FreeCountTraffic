@@ -10,8 +10,11 @@ import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.vision.core.RunningMode
 import com.google.mediapipe.tasks.vision.objectdetector.ObjectDetector
 
-/** On-device COCO object detector (EfficientDet-Lite0 via MediaPipe Tasks). Frames must be ARGB_8888. */
-class VehicleDetector(context: Context, scoreThreshold: Float = 0.35f) : AutoCloseable {
+/**
+ * On-device COCO object detector (EfficientDet-Lite0 via MediaPipe Tasks). Frames must be ARGB_8888.
+ * The threshold is kept low here; the engine applies the user's confidence setting.
+ */
+class VehicleDetector(context: Context, scoreThreshold: Float = 0.10f) : AutoCloseable {
 
     private val detector: ObjectDetector = ObjectDetector.createFromOptions(
         context,

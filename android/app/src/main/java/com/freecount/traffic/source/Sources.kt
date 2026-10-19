@@ -95,6 +95,22 @@ object VideoSource {
         }
     }
 
+    /** Recording date of the video (epoch ms) from its metadata, or null; labels intervals with real clock times. */
+    fun creationTime(context: Context, uri: Uri): Long? {
+        val r = MediaMetadataRetriever()
+        return try {
+            r.setDataSource(context, uri)
+            val raw = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE) ?: return null // e.g. 20250131T081500.000Z
+            val f = java.text.SimpleDateFormat("yyyyMMdd'T'HHmmss", java.util.Locale.US)
+                .apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+            f.parse(raw.take(15))?.time?.takeIf { it > 946_684_800_000L } // ignore 1904/1970 placeholder dates
+        } catch (_: Throwable) {
+            null
+        } finally {
+            r.release()
+        }
+    }
+
     /**
      * Steps through the video every [STEP_MS] and feeds the engine. Frame timestamps are the exact video
      * positions, so speed estimates do not depend on how fast the device processes.

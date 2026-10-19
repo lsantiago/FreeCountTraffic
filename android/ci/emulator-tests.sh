@@ -39,12 +39,20 @@ adb shell "run-as $PKG cp /data/local/tmp/v.mp4 files/v.mp4"
 adb shell am start -n "$PKG/.MainActivity" --es autotest_video v.mp4 --es autotest_zones "$ZONES"
 
 done_flag=0
-for i in $(seq 1 90); do   # up to ~15 minutes
-  sleep 10
-  adb exec-out screencap -p > "screenshots/run_$(printf '%02d' "$i").png"
+for i in $(seq 1 450); do   # up to ~15 minutes; a screenshot every 20 s
+  sleep 2
   if adb shell "run-as $PKG ls files" | tr -d '\r' | grep -q '^autotest_done$'; then done_flag=1; break; fi
+  if [ $((i % 10)) = 0 ]; then
+    adb exec-out screencap -p > "screenshots/run_$(printf '%02d' $((i / 10))).png"
+  fi
 done
 adb exec-out screencap -p > screenshots/run_final.png
+# the app then shows results (+1 s), the graph (+6 s) and the validation grid (+13 s)
+if [ "$done_flag" = 1 ]; then
+  sleep 3; adb exec-out screencap -p > screenshots/results.png
+  sleep 5; adb exec-out screencap -p > screenshots/graph.png
+  sleep 8; adb exec-out screencap -p > screenshots/validate.png
+fi
 
 for f in autotest_result.csv autotest_summary.txt autotest_done; do
   adb exec-out run-as "$PKG" cat "files/$f" > "screenshots/$f" 2>/dev/null

@@ -3,6 +3,7 @@ package com.freecount.traffic.ml
 import android.content.Context
 import android.graphics.Bitmap
 import com.freecount.traffic.core.CountEvent
+import com.freecount.traffic.core.RectN
 import com.freecount.traffic.core.SimpleTracker
 import com.freecount.traffic.core.Track
 import com.freecount.traffic.core.VehicleClass
@@ -10,6 +11,9 @@ import com.freecount.traffic.core.Zone
 import com.freecount.traffic.core.ZoneCounter
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import java.io.ByteArrayOutputStream
+import kotlin.math.max
+import kotlin.math.roundToInt
 
 data class EngineState(
     val frame: Bitmap? = null,
@@ -17,6 +21,9 @@ data class EngineState(
     val events: List<CountEvent> = emptyList(),
     val fps: Float = 0f,
 )
+
+/** What a finished session hands back: every event, the vehicle images (track id -> JPEG) and the analysed span. */
+class EngineResult(val events: List<CountEvent>, val thumbnails: Map<Int, ByteArray>, val spanMs: Long)
 
 /**
  * Detector -> tracker -> zone counter pipeline shared by every frame source.
@@ -30,11 +37,16 @@ class AnalysisEngine(private val context: Context) {
     private val counter = ZoneCounter()
     private var lastFrameNs = 0L
     private var fpsEma = 0f
+    private var startMs: Long? = null
+    private var lastMs = 0L
+    private val thumbs = HashMap<Int, ByteArray>()
 
     @Volatile var zones: List<Zone> = emptyList()
     @Volatile var enabledClasses: Set<VehicleClass> = setOf(
         VehicleClass.CAR, VehicleClass.TRUCK, VehicleClass.BUS, VehicleClass.MOTORCYCLE,
     )
+    @Volatile var confidence: Float = 0.30f
+    @Volatile var saveImages: Boolean = true
 
     private val _state = MutableStateFlow(EngineState())
     val state: StateFlow<EngineState> = _state
@@ -52,20 +64,33 @@ class AnalysisEngine(private val context: Context) {
     }
 
     /**
-     * @param tMs timestamp of the frame in ms on a monotonic clock (video position or camera timestamp).
+     * @param rawMs timestamp of the frame in ms on a monotonic clock (video position or camera timestamp).
      * @param counting when false the frame is only displayed.
      */
-    fun process(frame: Bitmap, tMs: Long, counting: Boolean) {
+    fun process(frame: Bitmap, rawMs: Long, counting: Boolean) {
         val det = detector
         if (!counting || det == null) {
             showFrame(frame)
             return
         }
         synchronized(lock) {
-            val detections = det.detect(frame).filter { it.cls in enabledClasses }
+            // event times are relative to the start of the session (camera timestamps are device uptime)
+            val start = startMs ?: rawMs.also { startMs = it }
+            val tMs = rawMs - start
+            lastMs = tMs
+
+            val detections = det.detect(frame).filter { it.cls in enabledClasses && it.score >= confidence }
             val tr = tracker.update(detections, tMs)
             val aspect = frame.width / frame.height.toFloat()
-            counter.update(zones, aspect, tr.active, tr.removed, tMs)
+            val produced = counter.update(zones, aspect, tr.active, tr.removed, tMs)
+
+            if (saveImages) {
+                for (e in produced) {
+                    if (thumbs.size >= MAX_THUMBNAILS || thumbs.containsKey(e.trackId)) continue
+                    val t = tr.active.firstOrNull { it.id == e.trackId } ?: continue
+                    thumbnail(frame, t.box)?.let { thumbs[e.trackId] = it }
+                }
+            }
 
             val now = System.nanoTime()
             if (lastFrameNs != 0L) {
@@ -83,19 +108,49 @@ class AnalysisEngine(private val context: Context) {
         counter.reset()
         lastFrameNs = 0L
         fpsEma = 0f
+        startMs = null
+        lastMs = 0L
+        thumbs.clear()
         _state.value = _state.value.copy(tracks = emptyList(), events = emptyList(), fps = 0f)
     }
 
-    /** Flush vehicles still inside a zone and return every event of the session. */
-    fun finish(frameAspect: Float): List<CountEvent> = synchronized(lock) {
+    /** Adds the speed of vehicles still inside a zone and returns every event of the session. */
+    fun finish(frameAspect: Float): EngineResult = synchronized(lock) {
         counter.finish(zones, frameAspect)
         val events = counter.events
         _state.value = _state.value.copy(events = events)
-        events
+        EngineResult(events, HashMap(thumbs), lastMs)
     }
 
     fun close() = synchronized(lock) {
         detector?.close()
         detector = null
+    }
+
+    companion object {
+        /** Like the reference app, only the first 500 vehicle images of a session are kept. */
+        const val MAX_THUMBNAILS = 500
+
+        /** Crop around the vehicle (with some margin), at most 200 px, as JPEG. */
+        private fun thumbnail(frame: Bitmap, box: RectN): ByteArray? = runCatching {
+            val w = frame.width
+            val h = frame.height
+            val padX = box.width * 0.15f
+            val padY = box.height * 0.15f
+            val l = ((box.left - padX) * w).roundToInt().coerceIn(0, w - 1)
+            val t = ((box.top - padY) * h).roundToInt().coerceIn(0, h - 1)
+            val r = ((box.right + padX) * w).roundToInt().coerceIn(l + 1, w)
+            val b = ((box.bottom + padY) * h).roundToInt().coerceIn(t + 1, h)
+            if (r - l < 4 || b - t < 4) return@runCatching null
+            var crop = Bitmap.createBitmap(frame, l, t, r - l, b - t)
+            val scale = 200f / max(crop.width, crop.height)
+            if (scale < 1f) {
+                crop = Bitmap.createScaledBitmap(crop, (crop.width * scale).roundToInt().coerceAtLeast(1), (crop.height * scale).roundToInt().coerceAtLeast(1), true)
+            }
+            ByteArrayOutputStream().use { out ->
+                crop.compress(Bitmap.CompressFormat.JPEG, 75, out)
+                out.toByteArray()
+            }
+        }.getOrNull()
     }
 }

@@ -1,5 +1,7 @@
 package com.freecount.traffic.core
 
+import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.max
 import kotlin.math.min
 
@@ -55,17 +57,38 @@ data class Track(
     val hits: Int,
     val firstSeenMs: Long,
     val lastSeenMs: Long,
+    /** Mean detection confidence of the winning class (0..1). */
+    val score: Float = 0f,
 )
 
-/** A user-drawn counting box. [lengthMeters] is the real-world length of the box along its long axis (for speed). */
+/** One of 8 screen directions (y grows downwards), used to count only the traffic going one way. */
+enum class Heading(val arrow: String, val degrees: Float) {
+    N("↑", 270f), NE("↗", 315f), E("→", 0f), SE("↘", 45f), S("↓", 90f), SW("↙", 135f), W("←", 180f), NW("↖", 225f);
+
+    /** True when a movement (in pixel-proportional units) points within [toleranceDeg] of this heading. */
+    fun accepts(dx: Float, dy: Float, toleranceDeg: Float = 67.5f): Boolean {
+        var diff = abs(Math.toDegrees(atan2(dy, dx).toDouble()).toFloat() - degrees) % 360f
+        if (diff > 180f) diff = 360f - diff
+        return diff <= toleranceDeg
+    }
+}
+
+/**
+ * A user-drawn counting box. [lengthMeters] is the real-world length of the box along its long axis (for speed).
+ * [direction] (optional) counts only vehicles moving that way.
+ */
 data class Zone(
     val id: Int,
     val name: String,
     val rect: RectN,
     val lengthMeters: Float? = null,
+    val direction: Heading? = null,
 )
 
-/** One counted vehicle. [direction] is an arrow: "→" "←" (horizontal zone) or "↓" "↑" (vertical zone). */
+/**
+ * One counted vehicle. [direction] is an arrow: "→" "←" (horizontal zone) or "↓" "↑" (vertical zone).
+ * [timeMs] is the moment the vehicle entered the box, relative to the start of the session.
+ */
 data class CountEvent(
     val zoneId: Int,
     val zoneName: String,
@@ -74,4 +97,5 @@ data class CountEvent(
     val direction: String,
     val speedKmh: Float?,
     val timeMs: Long,
+    val score: Float? = null,
 )

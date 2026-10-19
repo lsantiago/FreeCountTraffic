@@ -1,7 +1,10 @@
 # Free Count Traffic (Android)
 
 On-device vehicle counter inspired by *AI Traffic Count*. Draw counting boxes on a camera, video or RTSP image;
-vehicles that cross a box are counted by class and direction, and their speed is estimated. No video is stored or uploaded.
+a moving vehicle is counted (by class and direction) when its centre enters a box, and its speed is estimated when it
+leaves. Each box can count all directions or only one of 8. Results show unique vehicles, a graph and volume table per
+1/5/15/60-minute interval with the peak hour and PHF, and a "Validate Detections" image grid to delete or reclassify
+wrong detections; CSV export adds a 15-minute volume table. No video is stored or uploaded.
 
 - **Sources:** live camera (CameraX), video file, RTSP stream (Media3).
 - **Detection:** EfficientDet-Lite0 (COCO) through MediaPipe Tasks; car, truck, bus, motorcycle, bicycle, person.

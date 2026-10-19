@@ -26,10 +26,15 @@ class SimpleTracker(
         val first: Long,
         var last: Long,
         var hits: Int,
+        /** class -> sum of scores */
         val votes: MutableMap<VehicleClass, Float>,
+        /** class -> number of detections */
+        val votesN: MutableMap<VehicleClass, Int>,
     ) {
-        fun cls(): VehicleClass = votes.maxByOrNull { it.value }!!.key
-        fun snapshot() = Track(id, box, cls(), hits, first, last)
+        fun snapshot(): Track {
+            val best = votes.maxByOrNull { it.value }!!
+            return Track(id, box, best.key, hits, first, last, best.value / (votesN[best.key] ?: 1))
+        }
     }
 
     private val states = mutableListOf<State>()
@@ -73,6 +78,7 @@ class SimpleTracker(
             s.last = tMs
             s.hits++
             s.votes[d.cls] = (s.votes[d.cls] ?: 0f) + d.score
+            s.votesN[d.cls] = (s.votesN[d.cls] ?: 0) + 1
         }
 
         val removed = mutableListOf<Track>()
@@ -89,7 +95,7 @@ class SimpleTracker(
 
         for ((j, d) in detections.withIndex()) {
             if (j in usedDets) continue
-            states += State(nextId++, d.box, 0f, 0f, tMs, tMs, 1, mutableMapOf(d.cls to d.score))
+            states += State(nextId++, d.box, 0f, 0f, tMs, tMs, 1, mutableMapOf(d.cls to d.score), mutableMapOf(d.cls to 1))
         }
 
         return TrackerResult(

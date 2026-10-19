@@ -12,15 +12,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.freecount.traffic.core.CountEvent
+import com.freecount.traffic.core.Heading
 import com.freecount.traffic.core.Summary
 import com.freecount.traffic.core.VehicleClass
 import com.freecount.traffic.core.Zone
@@ -73,12 +82,14 @@ fun SummaryCard(total: Int, byClass: Map<VehicleClass, Int>) {
 }
 
 @Composable
-fun ZoneSection(index: Int, s: ZoneSummary) {
+fun ZoneSection(index: Int, s: ZoneSummary, filter: Heading? = null, onValidate: (() -> Unit)? = null) {
     Column(Modifier.fillMaxWidth().padding(top = 18.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Swatch(Palette.zone(index))
             Spacer(Modifier.width(10.dp))
-            Text(s.zoneName, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+            Text(s.zoneName, style = MaterialTheme.typography.titleMedium)
+            if (filter != null) Text("  only ${filter.arrow}", style = MaterialTheme.typography.bodySmall)
+            Spacer(Modifier.weight(1f))
             Text("${s.total} vehicles", style = MaterialTheme.typography.bodyMedium)
         }
         Column(Modifier.padding(start = 28.dp, top = 6.dp)) {
@@ -97,16 +108,42 @@ fun ZoneSection(index: Int, s: ZoneSummary) {
                     fontWeight = FontWeight.Medium,
                 )
             }
+            if (onValidate != null && s.total > 0) {
+                OutlinedButton(onClick = onValidate, modifier = Modifier.padding(top = 4.dp)) { Text("Validate Detections") }
+            }
         }
     }
 }
 
-/** Total card followed by one section per zone. */
+/** Total card (unique vehicles: one crossing two boxes counts once) followed by one section per zone. */
 @Composable
-fun ResultsPanel(events: List<CountEvent>, zones: List<Zone>) {
-    val byClass = events.groupingBy { it.cls }.eachCount()
+fun ResultsPanel(events: List<CountEvent>, zones: List<Zone>, onValidate: ((Int) -> Unit)? = null) {
+    val unique = Summary.unique(events)
     Column(Modifier.fillMaxWidth()) {
-        SummaryCard(events.size, byClass)
-        Summary.of(events, zones).forEachIndexed { i, s -> ZoneSection(i, s) }
+        SummaryCard(unique.size, Summary.byClass(unique))
+        Summary.of(events, zones).forEachIndexed { i, s ->
+            ZoneSection(
+                i, s,
+                filter = zones.firstOrNull { it.id == s.zoneId }?.direction,
+                onValidate = onValidate?.let { cb -> { cb(s.zoneId) } },
+            )
+        }
+    }
+}
+
+/** "All directions" + the 8 arrows, for the per-box direction filter. */
+@Composable
+fun DirectionMenu(current: Heading?, enabled: Boolean, onPick: (Heading?) -> Unit) {
+    var open by remember { mutableStateOf(false) }
+    Box {
+        TextButton(onClick = { open = true }, enabled = enabled) {
+            Text(current?.arrow ?: "⇄", style = MaterialTheme.typography.titleMedium)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(text = { Text((if (current == null) "✓ " else "") + "All directions") }, onClick = { onPick(null); open = false })
+            Heading.entries.forEach { h ->
+                DropdownMenuItem(text = { Text((if (current == h) "✓ " else "") + "Only ${h.arrow}") }, onClick = { onPick(h); open = false })
+            }
+        }
     }
 }

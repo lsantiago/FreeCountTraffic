@@ -31,6 +31,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -67,6 +68,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import kotlin.math.roundToInt
 
 private fun clock(ms: Long): String {
     val s = ms / 1000
@@ -75,12 +77,14 @@ private fun clock(ms: Long): String {
 
 @kotlin.OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
-fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit) {
+fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit, onResults: (Long) -> Unit = {}, autotest: Boolean = false) {
     val ctx = LocalContext.current
     val state by vm.engine.state.collectAsState()
     val zones by vm.zones.collectAsState()
 
     LaunchedEffect(source) { vm.selectSource(source) }
+    // like the reference app, the summary opens when a session ends (the CI autotest stays here)
+    LaunchedEffect(vm.lastSessionId) { vm.lastSessionId?.let { if (!autotest) onResults(it) } }
 
     // Optional location permission (stored with the session).
     val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
@@ -177,6 +181,16 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
                 SourceType.CAMERA -> {}
             }
 
+            OutlinedTextField(
+                value = vm.sessionName,
+                onValueChange = { vm.setSessionName(it) },
+                label = { Text("Session name") },
+                placeholder = { Text(if (source == SourceType.VIDEO) "Video file name" else "Date and time") },
+                singleLine = true,
+                enabled = !vm.running,
+                modifier = Modifier.fillMaxWidth(),
+            )
+
             val canStart = vm.modelReady && when (source) {
                 SourceType.CAMERA -> true
                 SourceType.VIDEO -> vm.videoUri != null
@@ -213,13 +227,16 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
                 ) {
                     Swatch(Palette.zone(i))
                     Spacer(Modifier.width(10.dp))
-                    Text(z.name, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                    Text(z.name, style = MaterialTheme.typography.bodyLarge)
+                    DirectionMenu(z.direction, enabled = !vm.running) { vm.setDirection(z.id, it) }
+                    Spacer(Modifier.weight(1f))
                     if (byClass.isEmpty()) Text("0", style = MaterialTheme.typography.bodyMedium) else ClassChips(byClass)
                 }
             }
             OutlinedButton(onClick = { vm.addZone() }, shape = RoundedCornerShape(12.dp)) { Text("+ Add box") }
             Text(
-                "Drag a box to move it, drag its white corner dot to resize. A vehicle is counted when it crosses the box.",
+                "Drag a box to move it, drag its white corner dot to resize. A moving vehicle is counted when its centre " +
+                    "enters the box. Tap the arrows next to a box to count only one direction.",
                 style = MaterialTheme.typography.bodySmall,
             )
 
@@ -252,9 +269,20 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Switch(checked = vm.soundOn, onCheckedChange = { vm.soundOn = it })
+                Switch(checked = vm.soundOn, onCheckedChange = { vm.setSound(it) })
                 Text("Beep when a vehicle is counted")
             }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Switch(checked = vm.saveImages, onCheckedChange = { vm.setSaveImagesOn(it) })
+                Text("Save object images for Validate Detections (first ${com.freecount.traffic.ml.AnalysisEngine.MAX_THUMBNAILS})")
+            }
+            Text("Confidence threshold: ${(vm.confidence * 100).roundToInt()} %", style = MaterialTheme.typography.bodyMedium)
+            Slider(
+                value = vm.confidence,
+                onValueChange = { vm.setConfidenceThreshold((it * 20).roundToInt() / 20f) },
+                valueRange = 0.1f..0.9f,
+            )
+            Text("Lower finds more vehicles but also more false detections.", style = MaterialTheme.typography.bodySmall)
 
             // --- live results ---
             if (state.events.isNotEmpty()) {

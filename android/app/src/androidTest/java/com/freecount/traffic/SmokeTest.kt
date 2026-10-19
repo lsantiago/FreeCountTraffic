@@ -29,7 +29,7 @@ class SmokeTest {
     @Test
     fun detectorLoadsAndRuns() {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
-        VehicleDetector(ctx).use { d ->
+        VehicleDetector(ctx, scoreThreshold = 0.35f).use { d ->
             val frame = Bitmap.createBitmap(640, 360, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.GRAY) }
             assertTrue(d.detect(frame).isEmpty())
         }

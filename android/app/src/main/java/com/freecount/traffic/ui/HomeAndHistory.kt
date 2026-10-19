@@ -17,9 +17,11 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -79,7 +81,7 @@ fun HomeScreen(onSource: (SourceType) -> Unit, onHistory: () -> Unit) {
         Text("Free Count Traffic", style = MaterialTheme.typography.headlineMedium)
         Text(
             "Count vehicles and estimate their speed with on-device AI. Draw boxes on the image and press start. " +
-                "Nothing is uploaded: no video or photo is stored, only counts.",
+                "Nothing is uploaded and videos are never stored: only counts and small images of the counted vehicles for validation.",
             style = MaterialTheme.typography.bodyMedium,
         )
         Spacer(Modifier.height(8.dp))
@@ -124,11 +126,20 @@ fun HistoryScreen(vm: AnalysisViewModel, onBack: () -> Unit, onOpen: (Long) -> U
 }
 
 @Composable
-fun SessionDetailScreen(vm: AnalysisViewModel, id: Long, onBack: () -> Unit) {
+fun SessionDetailScreen(
+    vm: AnalysisViewModel,
+    id: Long,
+    onBack: () -> Unit,
+    onGraph: () -> Unit = {},
+    onValidate: (Int) -> Unit = {},
+) {
     val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
     var data by remember { mutableStateOf<Pair<SessionEntity, List<CountEvent>>?>(null) }
-    LaunchedEffect(id) { data = vm.sessionWithEvents(id) }
+    var version by remember { mutableStateOf(0) }
+    LaunchedEffect(id, version) { data = vm.sessionWithEvents(id) }
+    var renaming by remember { mutableStateOf(false) }
+    var newName by remember { mutableStateOf("") }
 
     Column(
         Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(bottom = 28.dp),
@@ -139,13 +150,30 @@ fun SessionDetailScreen(vm: AnalysisViewModel, id: Long, onBack: () -> Unit) {
             return@Column
         }
         val zones = ZoneJson.decode(session.zonesJson)
+        if (renaming) {
+            AlertDialog(
+                onDismissRequest = { renaming = false },
+                title = { Text("Rename") },
+                text = { OutlinedTextField(value = newName, onValueChange = { newName = it }, singleLine = true) },
+                confirmButton = {
+                    TextButton(onClick = { renaming = false; scope.launch { vm.renameSession(id, newName); version++ } }) { Text("Save") }
+                },
+                dismissButton = { TextButton(onClick = { renaming = false }) { Text("Cancel") } },
+            )
+        }
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(session.name, Modifier.fillMaxWidth(), textAlign = TextAlign.Center, style = MaterialTheme.typography.titleLarge)
-            ResultsPanel(events, zones)
+            Text(
+                session.name + "  ✎",
+                Modifier.fillMaxWidth().clickable { newName = session.name; renaming = true },
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.titleLarge,
+            )
+            Button(onClick = onGraph, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) { Text("Show Graph") }
+            ResultsPanel(events, zones, onValidate = onValidate)
 
             val meta = buildString {
                 append(DateFormat.getDateTimeInstance().format(Date(session.startedAt)))
-                append("\nDuration: ${session.durationMs / 1000} s · ${session.source.lowercase()}")
+                append("\nDuration: ${com.freecount.traffic.core.CsvExporter.clock(session.durationMs)} · ${session.source.lowercase()}")
                 if (session.latitude != null && session.longitude != null) {
                     append(String.format(Locale.US, "\nLocation: %.5f, %.5f", session.latitude, session.longitude))
                 }
@@ -155,24 +183,25 @@ fun SessionDetailScreen(vm: AnalysisViewModel, id: Long, onBack: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(shape = RoundedCornerShape(12.dp), onClick = {
                     scope.launch {
-                        val f = withContext(Dispatchers.IO) { Exporter.csv(ctx, session, events) }
-                        Exporter.share(ctx, f, "text/csv")
+                        val files = withContext(Dispatchers.IO) { Exporter.csv(ctx, session, events) }
+                        Exporter.share(ctx, files, "text/csv")
                     }
                 }) { Text("Export CSV") }
                 Button(shape = RoundedCornerShape(12.dp), onClick = {
                     scope.launch {
                         val f = withContext(Dispatchers.IO) { Exporter.pdf(ctx, session, events) }
-                        Exporter.share(ctx, f, "application/pdf")
+                        Exporter.share(ctx, listOf(f), "application/pdf")
                     }
                 }) { Text("Export PDF") }
             }
+            Text("CSV export includes every vehicle and the 15-minute volume table.", style = MaterialTheme.typography.bodySmall)
             TextButton(onClick = { vm.deleteSession(id); onBack() }) { Text("Delete session") }
 
             Text("Vehicles", style = MaterialTheme.typography.titleMedium)
             events.forEach {
                 val speed = it.speedKmh?.let { s -> String.format(Locale.US, " · %.0f km/h", s) } ?: ""
                 Text(
-                    String.format(Locale.US, "%.1fs  %s  %s %s%s", it.timeMs / 1000.0, it.zoneName, it.cls.label, it.direction, speed),
+                    "${com.freecount.traffic.core.CsvExporter.clock(it.timeMs, session.clockStart)}  ${it.zoneName}  ${it.cls.label} ${it.direction}$speed",
                     style = MaterialTheme.typography.bodySmall,
                     fontWeight = FontWeight.Normal,
                 )
