@@ -1,3 +1,5 @@
+import java.net.URI
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -49,7 +51,7 @@ val downloadModel by tasks.registering {
     doLast {
         modelFile.parentFile.mkdirs()
         val url = "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/float16/1/efficientdet_lite0.tflite"
-        java.net.URL(url).openStream().use { input -> modelFile.outputStream().use { input.copyTo(it) } }
+        URI(url).toURL().openStream().use { input -> modelFile.outputStream().use { input.copyTo(it) } }
     }
 }
 tasks.named("preBuild") { dependsOn(downloadModel) }
