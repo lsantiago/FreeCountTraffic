@@ -1,3 +1,4 @@
+import AVFoundation
 import CoreLocation
 import Foundation
 import SwiftUI
@@ -68,8 +69,21 @@ final class OneShotLocation: NSObject, CLLocationManagerDelegate {
 
 @MainActor
 final class AppModel: ObservableObject {
-    @Published var zones: [Zone] = [Zone(id: 1, name: "Zone 1", rect: RectN(left: 0.2, top: 0.4, right: 0.8, bottom: 0.6))]
-    @Published var selectedZoneId: Int? = 1
+    /// The last-used boxes are kept between launches, like the reference app.
+    @Published var zones: [Zone] = {
+        if let data = UserDefaults.standard.data(forKey: "zones"),
+           let saved = try? JSONDecoder().decode([Zone].self, from: data), !saved.isEmpty { return saved }
+        return [Zone(id: 1, name: "Zone 1", rect: RectN(left: 0.2, top: 0.4, right: 0.8, bottom: 0.6))]
+    }()
+    @Published var selectedZoneId: Int?
+    /// Name of the next session: video file name, or the address from GPS for the camera; editable.
+    @Published var sessionName = ""
+    @Published var confidence: Float = UserDefaults.standard.object(forKey: "confidence") as? Float ?? 0.30 {
+        didSet { UserDefaults.standard.set(confidence, forKey: "confidence"); syncEngine() }
+    }
+    @Published var saveImages: Bool = UserDefaults.standard.object(forKey: "saveImages") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(saveImages, forKey: "saveImages"); syncEngine() }
+    }
     @Published var running = false
     @Published var soundOn: Bool = UserDefaults.standard.object(forKey: "soundOn") as? Bool ?? true {
         didSet { UserDefaults.standard.set(soundOn, forKey: "soundOn") }
@@ -104,10 +118,15 @@ final class AppModel: ObservableObject {
     private let store = SessionStore()
     private let locator = OneShotLocation()
     private var autotestStarted = false
+    private var nameEdited = false
+    private var clockStart: Date?
+    private let geocoder = CLGeocoder()
 
     init() {
         sessions = store.load()
-        engine.configure(zones: zones, enabled: enabledClasses)
+        selectedZoneId = zones.first?.id
+        nextZoneId = (zones.map { $0.id }.max() ?? 0) + 1
+        syncEngine()
         loadDetector(detectionModel)
     }
 
@@ -135,7 +154,19 @@ final class AppModel: ObservableObject {
 
     // MARK: boxes
 
-    private func syncEngine() { engine.configure(zones: zones, enabled: enabledClasses) }
+    private func syncEngine() {
+        engine.configure(zones: zones, enabled: enabledClasses, confidence: confidence, saveImages: saveImages)
+        if let data = try? JSONEncoder().encode(zones) { UserDefaults.standard.set(data, forKey: "zones") }
+    }
+
+    func setDirection(_ id: Int, _ heading: Heading?) {
+        if let i = zones.firstIndex(where: { $0.id == id }) { zones[i].direction = heading; syncEngine() }
+    }
+
+    func setSessionName(_ name: String) {
+        sessionName = name
+        nameEdited = true
+    }
 
     func addZone() {
         let id = nextZoneId
@@ -179,6 +210,9 @@ final class AppModel: ObservableObject {
         progress = nil
         message = nil
         snapshot = nil
+        sessionName = ""
+        nameEdited = false
+        lastSessionId = nil
         if kind == .camera { startCamera() } else { stopCamera() }
     }
 
@@ -203,10 +237,17 @@ final class AppModel: ObservableObject {
 
     private func stopCamera() { camera.stop() }
 
-    func loadVideo(_ url: URL) {
+    func loadVideo(_ url: URL, displayName: String? = nil) {
         videoURL = url
         message = nil
+        if !nameEdited { sessionName = displayName ?? url.deletingPathExtension().lastPathComponent }
+        clockStart = nil
         Task {
+            // recording date of the video labels the intervals with real clock times
+            if let date = try? await AVURLAsset(url: url).load(.creationDate)?.load(.dateValue) {
+                clockStart = date
+                if !nameEdited && sessionName == "Video" { sessionName = "Video " + Self.nameFormatter.string(from: date) }
+            }
             if let frame = await VideoSource.firstFrame(url) {
                 snapshot = EngineSnapshot(frame: frame, tracks: [], events: [], fps: 0)
             } else {
@@ -222,6 +263,10 @@ final class AppModel: ObservableObject {
         if source == .video && videoURL == nil { message = "Choose a video first."; return }
         engine.reset()
         startedAt = Date()
+        if source == .camera {
+            clockStart = startedAt
+            if !nameEdited { sessionName = "Session " + Self.nameFormatter.string(from: startedAt) }
+        }
         elapsedMs = 0
         message = nil
         running = true
@@ -275,23 +320,31 @@ final class AppModel: ObservableObject {
         timer?.invalidate()
         timer = nil
         let aspect = snapshot.map { Float($0.frame.width) / Float($0.frame.height) } ?? 16.0 / 9.0
-        let events = engine.finish(frameAspect: aspect)
+        let result = engine.finish(frameAspect: aspect)
+        let events = result.events
         if let s = snapshot { snapshot = EngineSnapshot(frame: s.frame, tracks: [], events: events, fps: 0) }
+        let name = sessionName.trimmingCharacters(in: .whitespaces)
         let record = SessionRecord(
             id: UUID(),
-            name: "Session " + Self.nameFormatter.string(from: startedAt),
+            name: name.isEmpty ? "Session " + Self.nameFormatter.string(from: startedAt) : name,
             source: source.rawValue,
             startedAt: startedAt,
-            durationMs: Int(Date().timeIntervalSince(startedAt) * 1000),
+            durationMs: source == .video ? Int(result.spanMs) : Int(Date().timeIntervalSince(startedAt) * 1000),
             latitude: location?.coordinate.latitude,
             longitude: location?.coordinate.longitude,
             zones: zones,
-            events: events
+            events: events,
+            clockStart: clockStart
         )
+        store.saveThumbnails(record.id, result.thumbnails)
         sessions.insert(record, at: 0)
         store.save(sessions)
-        message = "Saved \(events.count) vehicles to History."
+        lastSessionId = record.id
+        message = "Saved \(Summary.unique(events).count) vehicles to History."
     }
+
+    /// Most recent session saved from the analysis screen (its results can be opened from there).
+    @Published var lastSessionId: UUID?
 
     /// Keeps the screen from auto-locking while counting: a locked screen suspends the app and cuts the analysis short.
     private func setScreenAlwaysOn(_ on: Bool) {
@@ -303,7 +356,31 @@ final class AppModel: ObservableObject {
     func deleteSession(_ id: UUID) {
         sessions.removeAll { $0.id == id }
         store.save(sessions)
+        store.deleteThumbnails(id)
     }
+
+    func renameSession(_ id: UUID, _ name: String) {
+        let clean = name.trimmingCharacters(in: .whitespaces)
+        guard !clean.isEmpty, let i = sessions.firstIndex(where: { $0.id == id }) else { return }
+        sessions[i].name = clean
+        store.save(sessions)
+    }
+
+    /// Validation: remove a wrong detection from one box.
+    func deleteEvent(_ id: UUID, zoneId: Int, trackId: Int) {
+        guard let i = sessions.firstIndex(where: { $0.id == id }) else { return }
+        sessions[i].events.removeAll { $0.zoneId == zoneId && $0.trackId == trackId }
+        store.save(sessions)
+    }
+
+    /// Validation: fix the class of a vehicle (in every box it crossed).
+    func reclassify(_ id: UUID, trackId: Int, to cls: VehicleClass) {
+        guard let i = sessions.firstIndex(where: { $0.id == id }) else { return }
+        for j in sessions[i].events.indices where sessions[i].events[j].trackId == trackId { sessions[i].events[j].cls = cls }
+        store.save(sessions)
+    }
+
+    func thumbnail(_ id: UUID, trackId: Int) -> UIImage? { store.thumbnail(id, track: trackId) }
 
     private static let nameFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -312,13 +389,28 @@ final class AppModel: ObservableObject {
         return f
     }()
 
+    /// For the camera, the session is named after the street address (when the user did not type a name).
     private func fetchLocation() {
         location = nil
-        locator.onLocation = { [weak self] l in Task { @MainActor in self?.location = l } }
+        locator.onLocation = { [weak self] l in
+            Task { @MainActor in
+                guard let self else { return }
+                self.location = l
+                guard self.source == .camera, !self.nameEdited else { return }
+                if let p = try? await self.geocoder.reverseGeocodeLocation(l).first {
+                    let street = [p.thoroughfare, p.subThoroughfare].compactMap { $0 }.joined(separator: " ")
+                    let address = [street.isEmpty ? nil : street, p.locality].compactMap { $0 }.joined(separator: ", ")
+                    if !address.isEmpty && !self.nameEdited { self.sessionName = address }
+                }
+            }
+        }
         locator.request()
     }
 
     // MARK: headless test run (CI): launch with `-autotest_video <file in Documents> -autotest_zones "l,t,r,b,len;..."`
+
+    /// 1 = open results, 2 = show graph, 3 = close graph, 4 = validate the first box.
+    @Published var autotestStage = 0
 
     var autotestRequested: Bool { ProcessInfo.processInfo.arguments.contains("-autotest_video") }
 
@@ -358,9 +450,16 @@ final class AppModel: ObservableObject {
             let summary = Summary.of(events, zones: zones).map { Summary.line($0) }.joined(separator: "\n")
             try? CsvExporter.build(sessionName: "autotest", events: events)
                 .write(to: docs.appendingPathComponent("autotest_result.csv"), atomically: true, encoding: .utf8)
-            try? "total=\(events.count)\n\(summary)\n"
+            let thumbs = sessions.first.map { s in events.filter { store.thumbnail(s.id, track: $0.trackId) != nil }.count } ?? 0
+            try? "total=\(events.count)\nunique=\(Summary.unique(events).count)\nimages=\(thumbs)\n\(summary)\n"
                 .write(to: docs.appendingPathComponent("autotest_summary.txt"), atomically: true, encoding: .utf8)
             try? "ok".write(to: docs.appendingPathComponent("autotest_done"), atomically: true, encoding: .utf8)
+
+            // UI tour for the CI screenshots: results (+1 s), graph (+6 s), validation (+13 s)
+            for (delay, stage) in [(1, 1), (5, 2), (6, 3), (1, 4)] {
+                try? await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000_000)
+                autotestStage = stage
+            }
         }
     }
 }

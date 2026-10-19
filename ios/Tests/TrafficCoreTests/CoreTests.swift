@@ -67,13 +67,15 @@ final class ZoneCounterTests: XCTestCase {
         return out
     }
 
-    func testCountsDirectionAndSpeed() {
-        let produced = run(ZoneCounter(), zone, [(0.1, 0), (0.25, 1000), (0.75, 2000), (0.9, 2200)], id: 7)
+    func testCountsOnEntryThenAddsSpeedOnExit() {
+        let counter = ZoneCounter()
+        let produced = run(counter, zone, [(0.1, 0), (0.25, 1000), (0.75, 2000), (0.9, 2200)], id: 7)
         XCTAssertEqual(produced.count, 1)
         XCTAssertEqual(produced[0].direction, "→")
         XCTAssertEqual(produced[0].trackId, 7)
+        XCTAssertEqual(produced[0].timeMs, 1000) // counted when it entered
         // travelled (0.75-0.25)/0.6 = 0.833 of 30 m in 1 s = 25 m/s = 90 km/h
-        XCTAssertEqual(produced[0].speedKmh!, 90, accuracy: 1)
+        XCTAssertEqual(counter.events[0].speedKmh!, 90, accuracy: 1)
     }
 
     func testReverseDirection() {
@@ -82,38 +84,69 @@ final class ZoneCounterTests: XCTestCase {
         XCTAssertEqual(produced[0].direction, "←")
     }
 
-    func testBrushingTheZoneIsNotCounted() {
-        let produced = run(ZoneCounter(), zone, [(0.1, 0), (0.22, 1000), (0.25, 1500), (0.1, 2000)])
+    func testEnteringBrieflyCountsButHasNoSpeed() {
+        let counter = ZoneCounter()
+        let produced = run(counter, zone, [(0.1, 0), (0.22, 1000), (0.25, 1500), (0.1, 2000)])
+        XCTAssertEqual(produced.count, 1)
+        XCTAssertNil(counter.events[0].speedKmh)
+    }
+
+    func testParkedVehicleIsNotCounted() {
+        let produced = run(ZoneCounter(), zone, [(0.5, 0), (0.501, 1000), (0.499, 2000), (0.5, 3000)])
         XCTAssertTrue(produced.isEmpty)
+    }
+
+    func testReenteringTheSameZoneIsCountedOnce() {
+        let produced = run(ZoneCounter(), zone, [(0.1, 0), (0.25, 500), (0.15, 1000), (0.3, 1500), (0.5, 2000)])
+        XCTAssertEqual(produced.count, 1)
+    }
+
+    func testDirectionFilterIgnoresTheOtherWay() {
+        var eastOnly = zone
+        eastOnly.direction = .e
+        XCTAssertEqual(run(ZoneCounter(), eastOnly, [(0.1, 0), (0.3, 1000), (0.5, 2000)]).count, 1)
+        XCTAssertTrue(run(ZoneCounter(), eastOnly, [(0.9, 0), (0.7, 1000), (0.5, 2000)]).isEmpty)
+    }
+
+    func testHeadingAcceptsNearbyAngles() {
+        XCTAssertTrue(Heading.s.accepts(dx: 0.3, dy: 1))   // mostly down, a bit right
+        XCTAssertTrue(Heading.se.accepts(dx: 1, dy: 1))
+        XCTAssertFalse(Heading.s.accepts(dx: 0, dy: -1))
+        XCTAssertFalse(Heading.e.accepts(dx: -1, dy: 0.1))
+        XCTAssertTrue(Heading.ne.accepts(dx: 1, dy: -1))
     }
 
     func testNoSpeedWithoutZoneLength() {
         var noLength = zone
         noLength.lengthMeters = nil
-        let produced = run(ZoneCounter(), noLength, [(0.25, 1000), (0.75, 2000), (0.9, 2200)])
+        let counter = ZoneCounter()
+        let produced = run(counter, noLength, [(0.1, 0), (0.25, 1000), (0.75, 2000), (0.9, 2200)])
         XCTAssertEqual(produced.count, 1)
-        XCTAssertNil(produced[0].speedKmh)
+        XCTAssertNil(counter.events[0].speedKmh)
     }
 
-    func testTrackEndingInsideIsFlushedWhenRemoved() {
+    func testTrackEndingInsideGetsSpeedWhenRemoved() {
         let counter = ZoneCounter()
         counter.update(zones: [zone], frameAspect: aspect, active: [trackAt(3, 0.25, 0.5, 0)], removed: [], tMs: 0)
         counter.update(zones: [zone], frameAspect: aspect, active: [trackAt(3, 0.7, 0.5, 1000)], removed: [], tMs: 1000)
-        let produced = counter.update(zones: [zone], frameAspect: aspect, active: [], removed: [trackAt(3, 0.7, 0.5, 1000)], tMs: 3000)
-        XCTAssertEqual(produced.count, 1)
-    }
-
-    func testFinishFlushesVehiclesStillInside() {
-        let counter = ZoneCounter()
-        counter.update(zones: [zone], frameAspect: aspect, active: [trackAt(3, 0.25, 0.5, 0)], removed: [], tMs: 0)
-        counter.update(zones: [zone], frameAspect: aspect, active: [trackAt(3, 0.7, 0.5, 1000)], removed: [], tMs: 1000)
-        XCTAssertEqual(counter.finish(zones: [zone], frameAspect: aspect).count, 1)
         XCTAssertEqual(counter.events.count, 1)
+        counter.update(zones: [zone], frameAspect: aspect, active: [], removed: [trackAt(3, 0.7, 0.5, 1000)], tMs: 3000)
+        XCTAssertEqual(counter.events.count, 1)
+        XCTAssertNotNil(counter.events[0].speedKmh)
+    }
+
+    func testFinishAddsSpeedOfVehiclesStillInside() {
+        let counter = ZoneCounter()
+        counter.update(zones: [zone], frameAspect: aspect, active: [trackAt(3, 0.25, 0.5, 0)], removed: [], tMs: 0)
+        counter.update(zones: [zone], frameAspect: aspect, active: [trackAt(3, 0.7, 0.5, 1000)], removed: [], tMs: 1000)
+        counter.finish(zones: [zone], frameAspect: aspect)
+        XCTAssertEqual(counter.events.count, 1)
+        XCTAssertNotNil(counter.events[0].speedKmh)
     }
 
     func testVerticalZoneUsesVerticalArrows() {
         let vertical = Zone(id: 2, name: "Up/down", rect: RectN(left: 0.4, top: 0.1, right: 0.6, bottom: 0.9), lengthMeters: 20)
-        let produced = run(ZoneCounter(), vertical, [(0.15, 0), (0.4, 1000), (0.8, 2000), (0.95, 2200)], vertical: true, id: 1)
+        let produced = run(ZoneCounter(), vertical, [(0.05, 0), (0.4, 1000), (0.8, 2000), (0.95, 2200)], vertical: true, id: 1)
         XCTAssertEqual(produced.count, 1)
         XCTAssertEqual(produced[0].direction, "↓")
     }
@@ -144,8 +177,51 @@ final class SummaryAndCsvTests: XCTestCase {
         let csv = CsvExporter.build(sessionName: "Main, St", events: events)
         let lines = csv.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n")
         XCTAssertEqual(lines.count, 4)
-        XCTAssertEqual(lines[0], "session,zone,track_id,class,direction,speed_kmh,time_s")
+        XCTAssertEqual(lines[0], "session,zone,track_id,class,direction,speed_kmh,time_s,confidence")
         XCTAssertTrue(lines[1].hasPrefix("\"Main, St\",A,1,Car,→,40.0,1.00"))
         XCTAssertTrue(lines[3].contains(",3.00"))
+    }
+
+    func testUniqueCountsAVehicleInTwoBoxesOnce() {
+        let two = events + [CountEvent(zoneId: 2, zoneName: "B", trackId: 1, cls: .car, direction: "→", speedKmh: nil, timeMs: 1500)]
+        XCTAssertEqual(Summary.unique(two).count, 3)
+        XCTAssertEqual(Summary.byClass(Summary.unique(two))[.car], 2)
+    }
+
+    private func at(_ minute: Int64, _ track: Int, _ cls: VehicleClass = .car) -> CountEvent {
+        CountEvent(zoneId: 1, zoneName: "A", trackId: track, cls: cls, direction: "→", speedKmh: nil, timeMs: minute * 60_000)
+    }
+
+    func testIntervalsListEveryPeriod() {
+        let ev = [at(1, 1), at(2, 2, .truck), at(31, 3)]
+        let rows = Summary.intervals(ev, intervalMs: 15 * 60_000, durationMs: 45 * 60_000)
+        XCTAssertEqual(rows.map { $0.total }, [2, 0, 1])
+        XCTAssertEqual(rows[0].byClass[.truck], 1)
+        XCTAssertEqual(rows[2].startMs, 30 * 60_000)
+    }
+
+    func testPeakHourAndPhf() {
+        // 15-min volumes 10, 20, 30, 40, 5 -> peak hour = first four quarters (100 > 95), PHF = 100 / (4 * 40)
+        var ev: [CountEvent] = []
+        var id = 0
+        for (q, n) in [10, 20, 30, 40, 5].enumerated() {
+            for _ in 0..<n { id += 1; ev.append(at(Int64(q * 15 + 1), id)) }
+        }
+        let p = Summary.peakHour(ev, durationMs: 75 * 60_000)!
+        XCTAssertEqual(p.startMs, 0)
+        XCTAssertEqual(p.volume, 100)
+        XCTAssertEqual(p.phf!, 100.0 / 160.0, accuracy: 0.001)
+        XCTAssertNil(Summary.peakHour(ev, durationMs: 30 * 60_000))
+    }
+
+    func testIntervalsCsv() {
+        let csv = CsvExporter.intervals(sessionName: "S", events: [at(1, 1), at(16, 2, .bus)],
+                                        zones: [Zone(id: 1, name: "A", rect: RectN(left: 0, top: 0, right: 1, bottom: 1))],
+                                        intervalMs: 15 * 60_000, durationMs: 30 * 60_000)
+        let lines = csv.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n")
+        XCTAssertEqual(lines[0], "session,zone,interval_start,interval_end,car,truck,bus,motorcycle,bicycle,person,total")
+        XCTAssertEqual(lines[1], "S,All boxes (unique),00:00:00,00:15:00,1,0,0,0,0,0,1")
+        XCTAssertEqual(lines[4], "S,A,00:15:00,00:30:00,0,0,1,0,0,0,1")
+        XCTAssertEqual(lines.count, 5)
     }
 }

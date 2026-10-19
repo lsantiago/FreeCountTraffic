@@ -29,12 +29,20 @@ cp ../ci/testdata/vehicles_short.mp4 "$DATA/Documents/v.mp4"
 xcrun simctl launch "$UDID" "$BUNDLE" -autotest_video v.mp4 -autotest_zones "$ZONES"
 
 done_flag=0
-for i in $(seq 1 90); do   # up to ~15 minutes
-  sleep 10
-  xcrun simctl io "$UDID" screenshot "screenshots/run_$(printf '%02d' "$i").png" 2>/dev/null
+for i in $(seq 1 450); do   # up to ~15 minutes; a screenshot every 20 s
+  sleep 2
   if [ -f "$DATA/Documents/autotest_done" ]; then done_flag=1; break; fi
+  if [ $((i % 10)) = 0 ]; then
+    xcrun simctl io "$UDID" screenshot "screenshots/run_$(printf '%02d' $((i / 10))).png" 2>/dev/null
+  fi
 done
 xcrun simctl io "$UDID" screenshot screenshots/run_final.png 2>/dev/null
+# the app then shows results (+1 s), the graph (+6 s) and the validation grid (+13 s)
+if [ "$done_flag" = 1 ]; then
+  sleep 3; xcrun simctl io "$UDID" screenshot screenshots/results.png 2>/dev/null
+  sleep 5; xcrun simctl io "$UDID" screenshot screenshots/graph.png 2>/dev/null
+  sleep 8; xcrun simctl io "$UDID" screenshot screenshots/validate.png 2>/dev/null
+fi
 
 for f in autotest_result.csv autotest_summary.txt autotest_done; do
   cp "$DATA/Documents/$f" "screenshots/$f" 2>/dev/null || true

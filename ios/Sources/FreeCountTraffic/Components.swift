@@ -68,11 +68,14 @@ struct SummaryCard: View {
 struct ZoneSection: View {
     let index: Int
     let summary: ZoneSummary
+    var filter: Heading?
+    var onValidate: (() -> Void)?
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 Swatch(color: Theme.zone(index))
                 Text(summary.zoneName).font(.headline)
+                if let filter { Text("only \(filter.arrow)").font(.caption).foregroundColor(.secondary) }
                 Spacer()
                 Text("\(summary.total) vehicles").font(.subheadline)
             }
@@ -89,6 +92,14 @@ struct ZoneSection: View {
                     Text(String(format: "Speed: avg %.0f km/h · max %.0f km/h", avg, summary.maxSpeedKmh ?? 0))
                         .font(.caption.weight(.medium))
                 }
+                if let onValidate, summary.total > 0 {
+                    Button(action: onValidate) {
+                        Label("Validate Detections", systemImage: "checkmark.rectangle.stack")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.bordered)
+                    .padding(.top, 4)
+                }
             }
             .padding(.leading, 28)
         }
@@ -96,17 +107,42 @@ struct ZoneSection: View {
     }
 }
 
-/// Total card followed by one section per box.
+/// Total card (unique vehicles: one crossing two boxes counts once) followed by one section per box.
 struct ResultsPanel: View {
     let events: [CountEvent]
     let zones: [Zone]
+    var onValidate: ((Int) -> Void)?
     var body: some View {
-        var byClass: [VehicleClass: Int] = [:]
-        for e in events { byClass[e.cls, default: 0] += 1 }
+        let unique = Summary.unique(events)
         let summaries = Summary.of(events, zones: zones)
         return VStack(alignment: .leading, spacing: 0) {
-            SummaryCard(total: events.count, byClass: byClass)
-            ForEach(Array(summaries.enumerated()), id: \.offset) { i, s in ZoneSection(index: i, summary: s) }
+            SummaryCard(total: unique.count, byClass: Summary.byClass(unique))
+            ForEach(Array(summaries.enumerated()), id: \.offset) { i, s in
+                ZoneSection(index: i, summary: s,
+                            filter: zones.first(where: { $0.id == s.zoneId })?.direction,
+                            onValidate: onValidate.map { cb -> () -> Void in { cb(s.zoneId) } })
+            }
+        }
+    }
+}
+
+/// "All directions" + the 8 arrows, for the per-box direction filter.
+struct DirectionMenu: View {
+    let current: Heading?
+    let onPick: (Heading?) -> Void
+    var body: some View {
+        Menu {
+            Button { onPick(nil) } label: { Label("All directions", systemImage: current == nil ? "checkmark" : "arrow.up.and.down.and.arrow.left.and.right") }
+            ForEach(Heading.allCases, id: \.self) { h in
+                Button { onPick(h) } label: { Text((current == h ? "✓ " : "") + "Only \(h.arrow)") }
+            }
+        } label: {
+            Group {
+                if let current { Text(current.arrow).font(.system(size: 18, weight: .bold)) }
+                else { Image(systemName: "arrow.up.and.down.and.arrow.left.and.right").font(.system(size: 15)) }
+            }
+            .foregroundColor(Theme.orange)
+            .frame(width: 30, height: 30)
         }
     }
 }

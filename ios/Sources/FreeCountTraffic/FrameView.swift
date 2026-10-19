@@ -102,6 +102,11 @@ struct FrameView: View {
 
             ctx.draw(Text(z.name).font(.system(size: 12, weight: .semibold)).foregroundColor(.white),
                      at: CGPoint(x: r.minX + 6, y: r.minY + 9), anchor: .leading)
+            if let d = z.direction {
+                // counting direction filter
+                ctx.draw(Text(d.arrow).font(.system(size: 18, weight: .heavy)).foregroundColor(.white),
+                         at: CGPoint(x: r.maxX - 6, y: r.minY + 11), anchor: .trailing)
+            }
             if selected {
                 let h = CGPoint(x: r.maxX, y: r.maxY)
                 ctx.fill(Path(ellipseIn: CGRect(x: h.x - 9, y: h.y - 9, width: 18, height: 18)), with: .color(.white))

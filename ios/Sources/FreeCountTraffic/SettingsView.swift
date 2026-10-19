@@ -22,6 +22,26 @@ struct SettingsView: View {
                     }
                     .disabled(model.running)
 
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Label("Confidence Threshold", systemImage: "slider.horizontal.3")
+                            Spacer()
+                            Text("\(Int((model.confidence * 100).rounded())) %").foregroundColor(Theme.orange)
+                        }
+                        Slider(value: $model.confidence, in: 0.1...0.9, step: 0.05)
+                        Text("Lower finds more vehicles but also more false detections.").font(.caption).foregroundColor(.secondary)
+                    }
+
+                    Toggle(isOn: $model.saveImages) {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Save Object Images")
+                                Text("For Validate Detections (first 500 per session, kept on this device)")
+                                    .font(.caption).foregroundColor(.secondary)
+                            }
+                        } icon: { Image(systemName: "photo.on.rectangle") }
+                    }
+
                     Toggle(isOn: $model.showFps) {
                         Label("FPS Overlay", systemImage: "speedometer")
                     }
@@ -42,7 +62,7 @@ struct SettingsView: View {
                 }
 
                 Section("About") {
-                    Label("Everything runs on this device. No video or image is uploaded or stored.", systemImage: "lock.shield")
+                    Label("Everything runs on this device. Nothing is uploaded; videos are never stored.", systemImage: "lock.shield")
                         .font(.footnote)
                 }
             }

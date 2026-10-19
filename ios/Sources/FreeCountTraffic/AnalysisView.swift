@@ -29,6 +29,7 @@ struct AnalysisView: View {
     @EnvironmentObject var model: AppModel
     let source: SourceKind
     let onBack: () -> Void
+    var onResults: (UUID) -> Void = { _ in }
 
     @State private var pickerItem: PhotosPickerItem?
     @State private var showFiles = false
@@ -66,13 +67,29 @@ struct AnalysisView: View {
 
                     if source == .video { videoControls }
 
+                    HStack(spacing: 8) {
+                        Image(systemName: "pencil").foregroundColor(Theme.orange)
+                        TextField(source == .camera ? "Session name (default: address)" : "Session name",
+                                  text: Binding(get: { model.sessionName }, set: { model.setSessionName($0) }))
+                            .textFieldStyle(.roundedBorder)
+                            .disabled(model.running)
+                    }
+
                     actionButton
+
+                    if !model.running, let id = model.lastSessionId, model.sessions.contains(where: { $0.id == id }) {
+                        Button { onResults(id) } label: {
+                            Label("Open results: graph, validation, export", systemImage: "chart.bar.xaxis")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
 
                     Text("Boxes").font(.title2.weight(.bold)).padding(.top, 6)
                     ForEach(Array(model.zones.enumerated()), id: \.element.id) { i, z in boxRow(i, z) }
                     Button { model.addZone() } label: { Text("+ Add box") }
                         .buttonStyle(.bordered)
-                    Text("Drag a box to move it, drag its white corner dot to resize. A vehicle is counted when it crosses the box.")
+                    Text("Drag a box to move it, drag its white corner dot to resize. A moving vehicle is counted when its centre enters the box. Use the arrows button to count only one direction.")
                         .font(.caption)
 
                     boxSettings
@@ -81,6 +98,11 @@ struct AnalysisView: View {
                         Text("Results").font(.title2.weight(.bold)).padding(.top, 8)
                         ResultsPanel(events: events, zones: model.zones)
                     }
+                    Color.clear.frame(height: 0)
+                        .onChange(of: model.lastSessionId) { id in
+                            // the CI autotest stays on this screen
+                            if let id, !model.autotestRequested { onResults(id) }
+                        }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
@@ -94,7 +116,7 @@ struct AnalysisView: View {
         .onChange(of: pickerItem) { item in
             guard let item else { return }
             Task {
-                if let movie = try? await item.loadTransferable(type: MovieFile.self) { model.loadVideo(movie.url) }
+                if let movie = try? await item.loadTransferable(type: MovieFile.self) { model.loadVideo(movie.url, displayName: "Video") }
             }
         }
         .fileImporter(isPresented: $showFiles, allowedContentTypes: [.movie, .mpeg4Movie, .quickTimeMovie]) { result in
@@ -102,7 +124,9 @@ struct AnalysisView: View {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             let dest = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + "." + url.pathExtension)
-            if (try? FileManager.default.copyItem(at: url, to: dest)) != nil { model.loadVideo(dest) }
+            if (try? FileManager.default.copyItem(at: url, to: dest)) != nil {
+                model.loadVideo(dest, displayName: url.deletingPathExtension().lastPathComponent)
+            }
         }
     }
 
@@ -154,6 +178,8 @@ struct AnalysisView: View {
         return HStack(spacing: 10) {
             Swatch(color: Theme.zone(i))
             Text(z.name).font(.body)
+            DirectionMenu(current: z.direction) { model.setDirection(z.id, $0) }
+                .disabled(model.running)
             Spacer()
             if byClass.isEmpty { Text("0").font(.subheadline) } else { ClassChips(byClass: byClass) }
         }

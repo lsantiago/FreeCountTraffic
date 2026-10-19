@@ -85,33 +85,79 @@ public struct Track: Equatable {
     public var hits: Int
     public var firstSeenMs: Int64
     public var lastSeenMs: Int64
+    /// Mean detection confidence of the winning class (0...1).
+    public var score: Float
 
-    public init(id: Int, box: RectN, cls: VehicleClass, hits: Int, firstSeenMs: Int64, lastSeenMs: Int64) {
+    public init(id: Int, box: RectN, cls: VehicleClass, hits: Int, firstSeenMs: Int64, lastSeenMs: Int64, score: Float = 0) {
         self.id = id
         self.box = box
         self.cls = cls
         self.hits = hits
         self.firstSeenMs = firstSeenMs
         self.lastSeenMs = lastSeenMs
+        self.score = score
+    }
+}
+
+/// One of 8 screen directions (y grows downwards), used to count only the traffic going one way.
+public enum Heading: String, CaseIterable, Codable {
+    case n, ne, e, se, s, sw, w, nw
+
+    public var arrow: String {
+        switch self {
+        case .n: return "↑"
+        case .ne: return "↗"
+        case .e: return "→"
+        case .se: return "↘"
+        case .s: return "↓"
+        case .sw: return "↙"
+        case .w: return "←"
+        case .nw: return "↖"
+        }
+    }
+
+    /// Angle in degrees, 0 = east, 90 = south (screen coordinates).
+    public var degrees: Float {
+        switch self {
+        case .e: return 0
+        case .se: return 45
+        case .s: return 90
+        case .sw: return 135
+        case .w: return 180
+        case .nw: return 225
+        case .n: return 270
+        case .ne: return 315
+        }
+    }
+
+    /// True when a movement (in pixel-proportional units) points within `toleranceDeg` of this heading.
+    public func accepts(dx: Float, dy: Float, toleranceDeg: Float = 67.5) -> Bool {
+        var diff = abs(atan2f(dy, dx) * 180 / .pi - degrees).truncatingRemainder(dividingBy: 360)
+        if diff > 180 { diff = 360 - diff }
+        return diff <= toleranceDeg
     }
 }
 
 /// A user-drawn counting box. `lengthMeters` is the real-world length along the box's long axis (for speed).
+/// `direction` (optional) counts only vehicles moving that way.
 public struct Zone: Codable, Equatable, Identifiable {
     public var id: Int
     public var name: String
     public var rect: RectN
     public var lengthMeters: Float?
+    public var direction: Heading?
 
-    public init(id: Int, name: String, rect: RectN, lengthMeters: Float? = nil) {
+    public init(id: Int, name: String, rect: RectN, lengthMeters: Float? = nil, direction: Heading? = nil) {
         self.id = id
         self.name = name
         self.rect = rect
         self.lengthMeters = lengthMeters
+        self.direction = direction
     }
 }
 
 /// One counted vehicle. `direction` is an arrow: "→" "←" (horizontal zone) or "↓" "↑" (vertical zone).
+/// `timeMs` is the moment the vehicle entered the box, relative to the start of the session.
 public struct CountEvent: Codable, Equatable {
     public var zoneId: Int
     public var zoneName: String
@@ -120,8 +166,9 @@ public struct CountEvent: Codable, Equatable {
     public var direction: String
     public var speedKmh: Float?
     public var timeMs: Int64
+    public var score: Float?
 
-    public init(zoneId: Int, zoneName: String, trackId: Int, cls: VehicleClass, direction: String, speedKmh: Float?, timeMs: Int64) {
+    public init(zoneId: Int, zoneName: String, trackId: Int, cls: VehicleClass, direction: String, speedKmh: Float?, timeMs: Int64, score: Float? = nil) {
         self.zoneId = zoneId
         self.zoneName = zoneName
         self.trackId = trackId
@@ -129,5 +176,6 @@ public struct CountEvent: Codable, Equatable {
         self.direction = direction
         self.speedKmh = speedKmh
         self.timeMs = timeMs
+        self.score = score
     }
 }

@@ -48,15 +48,24 @@ final class VehicleDetector {
         config.computeUnits = .all
         #endif
         let vnModel = try VNCoreMLModel(for: MLModel(contentsOf: url, configuration: config))
-        // Inputs of the exported NMS pipeline.
-        vnModel.featureProvider = try? MLDictionaryFeatureProvider(dictionary: [
-            "iouThreshold": MLFeatureValue(double: 0.45),
-            "confidenceThreshold": MLFeatureValue(double: 0.30),
-        ])
         model = vnModel
         let req = VNCoreMLRequest(model: vnModel)
         req.imageCropAndScaleOption = .scaleFit
         request = req
+        applyThresholds()
+    }
+
+    /// Minimum detection confidence (Settings > Confidence Threshold).
+    var confidence: Float = 0.30 {
+        didSet { applyThresholds() }
+    }
+
+    /// Inputs of the exported NMS pipeline.
+    private func applyThresholds() {
+        model.featureProvider = try? MLDictionaryFeatureProvider(dictionary: [
+            "iouThreshold": MLFeatureValue(double: 0.45),
+            "confidenceThreshold": MLFeatureValue(double: Double(confidence)),
+        ])
     }
 
     /// Xcode builds ship a precompiled .mlmodelc; xtool/SwiftPM builds copy the raw .mlpackage, compiled here on first launch.
@@ -80,7 +89,8 @@ final class VehicleDetector {
         do { try handler.perform([request]) } catch { return [] }
         let observations = (request.results as? [VNRecognizedObjectObservation]) ?? []
         return observations.compactMap { o in
-            guard let top = o.labels.first, let cls = VehicleClass.fromCoco(top.identifier) else { return nil }
+            guard let top = o.labels.first, top.confidence >= confidence,
+                  let cls = VehicleClass.fromCoco(top.identifier) else { return nil }
             let b = o.boundingBox // normalized, origin bottom-left
             return Detection(
                 box: RectN(left: Float(b.minX), top: Float(1 - b.maxY), right: Float(b.maxX), bottom: Float(1 - b.minY)),

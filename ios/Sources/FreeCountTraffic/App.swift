@@ -30,12 +30,15 @@ struct RootView: View {
             case .home:
                 HomeView(onSource: { screen = .analysis($0) }, onHistory: { screen = .history })
             case .analysis(let kind):
-                AnalysisView(source: kind, onBack: { screen = .home })
+                AnalysisView(source: kind, onBack: { screen = .home }, onResults: { screen = .detail($0) })
             case .history:
                 HistoryView(onBack: { screen = .home }, onOpen: { screen = .detail($0) })
             case .detail(let id):
                 SessionDetailView(id: id, onBack: { screen = .history })
             }
+        }
+        .onChange(of: model.autotestStage) { stage in
+            if stage == 1, let id = model.lastSessionId { screen = .detail(id) }
         }
         .task {
             // CI hook: `-autotest_video <file>` jumps straight into a headless counting run.

@@ -23,7 +23,8 @@ public final class SimpleTracker {
         let first: Int64
         var last: Int64
         var hits: Int
-        var votes: [(VehicleClass, Float)]
+        /// class -> (sum of scores, number of detections)
+        var votes: [(VehicleClass, Float, Int)]
 
         init(id: Int, box: RectN, first: Int64, cls: VehicleClass, score: Float) {
             self.id = id
@@ -33,25 +34,27 @@ public final class SimpleTracker {
             self.first = first
             self.last = first
             self.hits = 1
-            self.votes = [(cls, score)]
+            self.votes = [(cls, score, 1)]
         }
 
         func vote(_ cls: VehicleClass, _ score: Float) {
             if let i = votes.firstIndex(where: { $0.0 == cls }) {
                 votes[i].1 += score
+                votes[i].2 += 1
             } else {
-                votes.append((cls, score))
+                votes.append((cls, score, 1))
             }
         }
 
-        func cls() -> VehicleClass {
+        func best() -> (VehicleClass, Float, Int) {
             var best = votes[0]
             for v in votes.dropFirst() where v.1 > best.1 { best = v }
-            return best.0
+            return best
         }
 
         func snapshot() -> Track {
-            Track(id: id, box: box, cls: cls(), hits: hits, firstSeenMs: first, lastSeenMs: last)
+            let b = best()
+            return Track(id: id, box: box, cls: b.0, hits: hits, firstSeenMs: first, lastSeenMs: last, score: b.1 / Float(b.2))
         }
     }
 
