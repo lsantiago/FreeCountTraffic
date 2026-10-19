@@ -19,7 +19,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Fetch Core ML model
-        run: ./scripts/fetch-model.sh
+        run: bash scripts/fetch-model.sh
 
       - name: Install XcodeGen and generate the Xcode project
         run: |
