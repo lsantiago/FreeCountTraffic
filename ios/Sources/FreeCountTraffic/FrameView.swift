@@ -5,6 +5,8 @@ import TrafficCore
 struct FrameView: View {
     let frame: CGImage?
     let tracks: [Track]
+    let trails: [Int: [CGPoint]]
+    let fps: Double?
     let zones: [Zone]
     let counts: [Int: Int]
     let selectedId: Int?
@@ -40,6 +42,19 @@ struct FrameView: View {
                     .gesture(drag(geo.size))
             }
         }
+        .overlay(alignment: .topTrailing) {
+            if let fps, fps > 0 {
+                HStack(spacing: 4) {
+                    Image(systemName: "cpu").font(.system(size: 11))
+                    Text("\(Int(fps.rounded())) FPS").font(.system(size: 12, weight: .semibold))
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Color.black.opacity(0.55), in: Capsule())
+                .padding(8)
+            }
+        }
         .aspectRatio(aspect, contentMode: .fit)
         .frame(maxWidth: .infinity)
     }
@@ -53,14 +68,21 @@ struct FrameView: View {
 
     private func draw(_ ctx: GraphicsContext, _ size: CGSize) {
         for t in tracks {
-            let c = Theme.cls(t.cls)
+            let c = Theme.track(t.id)
             let r = rect(t.box, size)
-            ctx.stroke(Path(roundedRect: r, cornerRadius: 4), with: .color(c), lineWidth: 1.5)
-            let tag = t.cls.label.lowercased()
-            let tagRect = CGRect(x: r.minX, y: r.minY - 13, width: CGFloat(tag.count) * 5.6 + 8, height: 12)
-            ctx.fill(Path(roundedRect: tagRect, cornerRadius: 3), with: .color(c.opacity(0.9)))
-            ctx.draw(Text(tag).font(.system(size: 9, weight: .semibold)).foregroundColor(.white),
-                     at: CGPoint(x: tagRect.minX + 4, y: tagRect.midY), anchor: .leading)
+            // trailing line = recent path of the vehicle's centre (what the counting rule uses)
+            if let pts = trails[t.id], pts.count > 1 {
+                var path = Path()
+                path.move(to: CGPoint(x: pts[0].x * size.width, y: pts[0].y * size.height))
+                for p in pts.dropFirst() { path.addLine(to: CGPoint(x: p.x * size.width, y: p.y * size.height)) }
+                ctx.stroke(path, with: .color(c), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+            }
+            ctx.stroke(Path(roundedRect: r, cornerRadius: 3), with: .color(c), lineWidth: 1.5)
+            let tag = t.cls.label
+            let tagRect = CGRect(x: r.minX, y: r.minY - 15, width: CGFloat(tag.count) * 6.4 + 10, height: 15)
+            ctx.fill(Path(roundedRect: tagRect, cornerRadius: 2), with: .color(c.opacity(0.9)))
+            ctx.draw(Text(tag).font(.system(size: 10, weight: .semibold)).foregroundColor(.white),
+                     at: CGPoint(x: tagRect.minX + 5, y: tagRect.midY), anchor: .leading)
         }
         for (i, z) in zones.enumerated() {
             let c = Theme.zone(i)

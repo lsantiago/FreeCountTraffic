@@ -5,3 +5,4 @@
 xtool/
 DerivedData/
 .swiftpm/
+*.mlpackage

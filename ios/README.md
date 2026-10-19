@@ -3,7 +3,9 @@
 Native SwiftUI port of the Android app: camera and video sources, counting boxes, per-class / per-direction counts,
 speed estimation, history, CSV and PDF export. Everything runs on-device.
 
-- **Detection:** Apple's YOLOv3-Tiny Core ML model (COCO) through Vision. Downloaded by `scripts/fetch-model.sh`, not committed.
+- **Detection:** Ultralytics YOLO11 (n / s / m = Fastest / Balanced / High Accuracy, selectable in Settings) exported to Core ML
+  and run through Vision. `scripts/export-models.sh` generates them (CI caches the result); they are not committed.
+  YOLO weights are AGPL-3.0: fine for personal / open-source use, check the licence before commercial distribution.
 - **Core logic:** `Sources/TrafficCore` is a Swift port of the Android Kotlin core, tested with the same cases
   (`Tests/TrafficCoreTests`).
 - **Not on iOS yet:** RTSP streams (iOS has no built-in RTSP; it needs a third-party player).
@@ -26,9 +28,9 @@ This folder is a SwiftPM package with an `xtool.yml`, so [xtool](https://github.
 and install it:
 
 ```bash
-./scripts/fetch-model.sh   # once
+./scripts/export-models.sh # once (needs Python 3.10-3.12)
 xtool dev                  # build, sign with your Apple ID, install and launch on the connected iPhone
 ```
 
-The Core ML model is compiled on the device at first launch in this mode (xtool has no `coremlc`).
+The Core ML models are compiled on the device at first launch in this mode (xtool has no `coremlc`).
 The xtool path is set up from the docs but has not been run yet; CI uses XcodeGen + xcodebuild (`project.yml`).

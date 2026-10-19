@@ -34,20 +34,25 @@ struct AnalysisView: View {
     @State private var showFiles = false
     @State private var lengthText = ""
     @State private var lengthZoneId: Int?
+    @State private var showSettings = false
 
     private var events: [CountEvent] { model.snapshot?.events ?? [] }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                TopBar(title: source == .camera ? "Live Camera" : "Video File") {
+                TopBar(title: source == .camera ? "Live Camera" : "Video File", onBack: {
                     model.leaveAnalysis()
                     onBack()
-                }
+                }, trailing: AnyView(
+                    Button { showSettings = true } label: { Image(systemName: "gearshape").font(.system(size: 18)) }
+                ))
 
                 FrameView(
                     frame: model.snapshot?.frame,
                     tracks: model.snapshot?.tracks ?? [],
+                    trails: model.snapshot?.trails ?? [:],
+                    fps: model.running && model.showFps ? model.snapshot?.fps : nil,
                     zones: model.zones,
                     counts: Dictionary(grouping: events, by: { $0.zoneId }).mapValues { $0.count },
                     selectedId: model.selectedZoneId,
@@ -71,7 +76,6 @@ struct AnalysisView: View {
                         .font(.caption)
 
                     boxSettings
-                    countSettings
 
                     if !events.isEmpty {
                         Text("Results").font(.title2.weight(.bold)).padding(.top, 8)
@@ -83,6 +87,7 @@ struct AnalysisView: View {
             }
         }
         .onAppear { model.selectSource(source) }
+        .sheet(isPresented: $showSettings) { SettingsView().environmentObject(model) }
         .onChange(of: events.count) { _ in
             if model.soundOn { AudioServicesPlaySystemSound(1057) }
         }
@@ -119,23 +124,27 @@ struct AnalysisView: View {
 
     private var canStart: Bool { model.modelReady && (source == .camera || model.videoURL != nil) }
 
+    /// Full-width orange bar like the reference app: "■ Stop - 00:01:31s".
     private var actionButton: some View {
-        HStack {
-            Spacer()
-            if model.running {
-                Button { model.stop() } label: {
-                    Text("■  Stop - \(clock(model.elapsedMs))").fontWeight(.semibold).padding(.horizontal, 18).padding(.vertical, 4)
+        Button {
+            if model.running { model.stop() } else { model.start() }
+        } label: {
+            HStack(spacing: 10) {
+                if model.running {
+                    Image(systemName: "stop.fill")
+                    Text("Stop - \(clock(model.elapsedMs))s")
+                } else {
+                    Image(systemName: "record.circle")
+                    Text("Start counting")
                 }
-                .buttonStyle(.borderedProminent)
-            } else {
-                Button { model.start() } label: {
-                    Text("Start counting").fontWeight(.semibold).padding(.horizontal, 18).padding(.vertical, 4)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!canStart)
             }
-            Spacer()
+            .font(.headline)
+            .foregroundColor(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(Theme.orange.opacity(model.running || canStart ? 1 : 0.4), in: RoundedRectangle(cornerRadius: 14))
         }
+        .disabled(!model.running && !canStart)
     }
 
     private func boxRow(_ i: Int, _ z: Zone) -> some View {
@@ -177,22 +186,4 @@ struct AnalysisView: View {
         }
     }
 
-    private var countSettings: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Count").font(.headline).padding(.top, 8)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 8)], alignment: .leading, spacing: 8) {
-                ForEach(VehicleClass.allCases, id: \.self) { c in
-                    let on = model.enabledClasses.contains(c)
-                    Button { model.toggleClass(c) } label: {
-                        Text(c.label).font(.subheadline)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
-                            .background(on ? Theme.peach : Color.gray.opacity(0.12), in: Capsule())
-                            .foregroundColor(on ? Theme.ink : .primary)
-                    }
-                }
-            }
-            Toggle("Beep when a vehicle is counted", isOn: $model.soundOn).tint(Theme.orange)
-        }
-    }
 }

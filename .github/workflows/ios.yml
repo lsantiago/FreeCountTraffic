@@ -18,8 +18,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fetch Core ML model
-        run: bash scripts/fetch-model.sh
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache exported Core ML models
+        id: models
+        uses: actions/cache@v4
+        with:
+          path: ios/Sources/FreeCountTraffic/Resources
+          key: yolo11-coreml-v1-${{ hashFiles('ios/scripts/export-models.sh') }}
+
+      - name: Export YOLO11 n/s/m to Core ML
+        if: steps.models.outputs.cache-hit != 'true'
+        run: bash scripts/export-models.sh
 
       - name: Install XcodeGen and generate the Xcode project
         run: |

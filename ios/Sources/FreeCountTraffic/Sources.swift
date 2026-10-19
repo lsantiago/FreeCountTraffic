@@ -1,14 +1,27 @@
 import AVFoundation
 import CoreImage
 import Foundation
+import ImageIO
 
 let maxFrameSide: CGFloat = 640
+
+private let sharedCIContext = CIContext()
+
+/// Downscales so the longest side is `maxFrameSide` and renders to a CGImage.
+private func makeFrame(_ input: CIImage) -> CGImage? {
+    var image = input
+    let longest = max(image.extent.width, image.extent.height)
+    if longest > maxFrameSide {
+        let s = maxFrameSide / longest
+        image = image.transformed(by: CGAffineTransform(scaleX: s, y: s))
+    }
+    return sharedCIContext.createCGImage(image, from: image.extent)
+}
 
 /// Back camera -> frames (downscaled so the longest side is 640 px). Runs on its own queue.
 final class CameraSource: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private let session = AVCaptureSession()
     private let queue = DispatchQueue(label: "freecount.camera")
-    private let ciContext = CIContext()
     private var onFrame: (@Sendable (CGImage, Int64) -> Void)?
     private var running = false
 
@@ -63,14 +76,8 @@ final class CameraSource: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        var image = CIImage(cvPixelBuffer: buffer)
-        let longest = max(image.extent.width, image.extent.height)
-        if longest > maxFrameSide {
-            let s = maxFrameSide / longest
-            image = image.transformed(by: CGAffineTransform(scaleX: s, y: s))
-        }
-        guard let cg = ciContext.createCGImage(image, from: image.extent) else { return }
+        guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer),
+              let cg = makeFrame(CIImage(cvPixelBuffer: buffer)) else { return }
         let ms = Int64(CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) * 1000)
         onFrame?(cg, ms)
     }
@@ -79,40 +86,58 @@ final class CameraSource: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
 enum VideoSource {
     static let stepMs: Int64 = 100
 
-    private static func generator(_ asset: AVAsset) -> AVAssetImageGenerator {
-        let g = AVAssetImageGenerator(asset: asset)
-        g.appliesPreferredTrackTransform = true
-        g.maximumSize = CGSize(width: maxFrameSide, height: maxFrameSide)
-        // A little tolerance keeps decoding fast; the exact frame time is read back from `actualTime`.
-        g.requestedTimeToleranceBefore = CMTime(value: 1, timescale: 40)
-        g.requestedTimeToleranceAfter = CMTime(value: 1, timescale: 40)
-        return g
-    }
-
     /// First frame of the video, to place boxes before the run.
     static func firstFrame(_ url: URL) async -> CGImage? {
-        let g = generator(AVURLAsset(url: url))
+        let g = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        g.appliesPreferredTrackTransform = true
+        g.maximumSize = CGSize(width: maxFrameSide, height: maxFrameSide)
         return try? await g.image(at: .zero).image
     }
 
-    /// Steps through the video every `stepMs`. Timestamps are the real frame times, so speed estimates do not
-    /// depend on how fast the device processes.
+    private static func orientation(_ t: CGAffineTransform) -> CGImagePropertyOrientation {
+        if t.a == 0 && t.b == 1 && t.c == -1 && t.d == 0 { return .right }
+        if t.a == 0 && t.b == -1 && t.c == 1 && t.d == 0 { return .left }
+        if t.a == -1 && t.d == -1 { return .down }
+        return .up
+    }
+
+    /// Decodes the video sequentially (fast, hardware decoder) and hands every `stepMs` a frame to `process`.
+    /// Timestamps are the real presentation times, so speed estimates do not depend on how fast the device processes.
     static func run(
         url: URL,
         process: @Sendable (CGImage, Int64) -> Void,
         onProgress: @Sendable (Double) -> Void
     ) async throws {
         let asset = AVURLAsset(url: url)
-        let duration = try await asset.load(.duration)
-        let totalMs = Int64(duration.seconds * 1000)
-        let g = generator(asset)
-        var t: Int64 = 0
-        while t <= totalMs {
-            try Task.checkCancellation()
-            let result = try await g.image(at: CMTime(value: t, timescale: 1000))
-            process(result.image, Int64(result.actualTime.seconds * 1000))
-            onProgress(totalMs > 0 ? Double(t) / Double(totalMs) : 1)
-            t += stepMs
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+            throw NSError(domain: "VideoSource", code: 1, userInfo: [NSLocalizedDescriptionKey: "No video track found."])
         }
+        let totalMs = max(Int64(try await asset.load(.duration).seconds * 1000), 1)
+        let transform = try await track.load(.preferredTransform)
+        let orient = orientation(transform)
+
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(
+            track: track,
+            outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+        )
+        output.alwaysCopiesSampleData = false
+        reader.add(output)
+        guard reader.startReading() else {
+            throw reader.error ?? NSError(domain: "VideoSource", code: 2, userInfo: [NSLocalizedDescriptionKey: "Could not read the video."])
+        }
+
+        var nextMs: Int64 = 0
+        while let sample = output.copyNextSampleBuffer() {
+            try Task.checkCancellation()
+            let ms = Int64(CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample)) * 1000)
+            if ms < nextMs { continue }
+            guard let buffer = CMSampleBufferGetImageBuffer(sample),
+                  let cg = makeFrame(CIImage(cvPixelBuffer: buffer).oriented(orient)) else { continue }
+            process(cg, ms)
+            onProgress(min(Double(ms) / Double(totalMs), 1))
+            nextMs = ms + stepMs
+        }
+        if reader.status == .failed, let e = reader.error { throw e }
     }
 }

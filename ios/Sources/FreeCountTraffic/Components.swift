@@ -5,7 +5,10 @@ struct Swatch: View {
     let color: Color
     var size: CGFloat = 18
     var body: some View {
-        RoundedRectangle(cornerRadius: 5).fill(color).frame(width: size, height: size)
+        RoundedRectangle(cornerRadius: 4)
+            .fill(color.opacity(0.35))
+            .overlay(RoundedRectangle(cornerRadius: 4).stroke(color, lineWidth: 1.5))
+            .frame(width: size, height: size)
     }
 }
 
@@ -15,7 +18,7 @@ struct ClassRow: View {
     let count: Int
     var body: some View {
         HStack(spacing: 10) {
-            Swatch(color: Theme.cls(cls), size: 14)
+            ClassIcon(cls: cls, size: 15)
             Text(cls.label.uppercased()).font(.subheadline)
             Spacer()
             Text("\(count)").font(.subheadline)
@@ -32,7 +35,7 @@ struct ClassChips: View {
             ForEach(VehicleClass.allCases, id: \.self) { c in
                 if let n = byClass[c] {
                     HStack(spacing: 4) {
-                        Swatch(color: Theme.cls(c), size: 10)
+                        ClassIcon(cls: c, size: 16)
                         Text("\(n)").font(.subheadline)
                     }
                 }
@@ -111,6 +114,7 @@ struct ResultsPanel: View {
 struct TopBar: View {
     let title: String
     let onBack: () -> Void
+    var trailing: AnyView?
     var body: some View {
         HStack {
             Button(action: onBack) { Text("‹ Back").font(.subheadline.weight(.semibold)) }
@@ -118,7 +122,11 @@ struct TopBar: View {
             Spacer()
             Text(title).font(.headline)
             Spacer()
-            Color.clear.frame(width: 72, height: 1)
+            HStack {
+                Spacer()
+                trailing
+            }
+            .frame(width: 72, height: 24)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)

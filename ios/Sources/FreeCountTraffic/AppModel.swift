@@ -46,8 +46,17 @@ final class AppModel: ObservableObject {
     @Published var zones: [Zone] = [Zone(id: 1, name: "Zone 1", rect: RectN(left: 0.2, top: 0.4, right: 0.8, bottom: 0.6))]
     @Published var selectedZoneId: Int? = 1
     @Published var running = false
-    @Published var soundOn = true
-    @Published var enabledClasses: Set<VehicleClass> = [.car, .truck, .bus, .motorcycle]
+    @Published var soundOn: Bool = UserDefaults.standard.object(forKey: "soundOn") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(soundOn, forKey: "soundOn") }
+    }
+    @Published var showFps: Bool = UserDefaults.standard.object(forKey: "showFps") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(showFps, forKey: "showFps") }
+    }
+    @Published var detectionModel: DetectionModel = DetectionModel(rawValue: UserDefaults.standard.string(forKey: "detectionModel") ?? "") ?? .balanced
+    @Published var enabledClasses: Set<VehicleClass> = {
+        let saved = (UserDefaults.standard.stringArray(forKey: "enabledClasses") ?? []).compactMap { VehicleClass(rawValue: $0) }
+        return saved.isEmpty ? [.car, .truck, .bus, .motorcycle] : Set(saved)
+    }()
     @Published var message: String?
     @Published var progress: Double?
     @Published var videoURL: URL?
@@ -72,16 +81,29 @@ final class AppModel: ObservableObject {
     init() {
         sessions = store.load()
         engine.configure(zones: zones, enabled: enabledClasses)
+        loadDetector(detectionModel)
+    }
+
+    private func loadDetector(_ kind: DetectionModel) {
+        modelReady = false
         let engine = engine
         Task.detached { [weak self] in
             do {
-                try engine.loadModel()
+                try engine.loadModel(kind)
                 await MainActor.run { self?.modelReady = true }
             } catch {
                 let text = error.localizedDescription
                 await MainActor.run { self?.message = "Could not load the detection model: \(text)" }
             }
         }
+    }
+
+    /// Settings: switch between High Accuracy / Balanced / Fastest (not while counting).
+    func setDetectionModel(_ kind: DetectionModel) {
+        guard !running, kind != detectionModel else { return }
+        detectionModel = kind
+        UserDefaults.standard.set(kind.rawValue, forKey: "detectionModel")
+        loadDetector(kind)
     }
 
     // MARK: boxes
@@ -117,6 +139,7 @@ final class AppModel: ObservableObject {
 
     func toggleClass(_ c: VehicleClass) {
         if enabledClasses.contains(c) { enabledClasses.remove(c) } else { enabledClasses.insert(c) }
+        UserDefaults.standard.set(enabledClasses.map { $0.rawValue }, forKey: "enabledClasses")
         syncEngine()
     }
 

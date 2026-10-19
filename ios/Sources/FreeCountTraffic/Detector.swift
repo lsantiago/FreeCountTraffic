@@ -4,16 +4,41 @@ import Foundation
 import TrafficCore
 import Vision
 
-/// On-device COCO object detector: Apple's YOLOv3-Tiny Core ML model run through Vision.
-/// The model is not committed; `scripts/fetch-model.sh` downloads it into Resources/ before building.
+/// Three accuracy / speed trade-offs, like the reference app's "Detection Model" setting.
+enum DetectionModel: String, CaseIterable, Identifiable {
+    case highAccuracy, balanced, fastest
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .highAccuracy: return "High Accuracy"
+        case .balanced: return "Balanced"
+        case .fastest: return "Fastest"
+        }
+    }
+
+    /// YOLO11 medium / small / nano, exported to Core ML with built-in NMS by `scripts/export-models.sh`.
+    var resource: String {
+        switch self {
+        case .highAccuracy: return "yolo11m"
+        case .balanced: return "yolo11s"
+        case .fastest: return "yolo11n"
+        }
+    }
+}
+
+/// On-device COCO object detector: an Ultralytics YOLO11 Core ML model run through Vision.
+/// The models are not committed; `scripts/export-models.sh` generates them into Resources/ before building.
 final class VehicleDetector {
     private let model: VNCoreMLModel
+    private let request: VNCoreMLRequest
 
-    init() throws {
-        guard let url = Self.compiledModelURL() else {
+    init(_ kind: DetectionModel) throws {
+        guard let url = Self.modelURL(kind.resource) else {
             throw NSError(
                 domain: "VehicleDetector", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "YOLOv3Tiny model not found in the app bundle. Run ios/scripts/fetch-model.sh and rebuild."]
+                userInfo: [NSLocalizedDescriptionKey: "\(kind.resource) model not found in the app bundle. Run ios/scripts/export-models.sh and rebuild."]
             )
         }
         let config = MLModelConfiguration()
@@ -22,34 +47,40 @@ final class VehicleDetector {
         #else
         config.computeUnits = .all
         #endif
-        model = try VNCoreMLModel(for: MLModel(contentsOf: url, configuration: config))
+        let vnModel = try VNCoreMLModel(for: MLModel(contentsOf: url, configuration: config))
+        // Inputs of the exported NMS pipeline.
+        vnModel.featureProvider = try? MLDictionaryFeatureProvider(dictionary: [
+            "iouThreshold": MLFeatureValue(double: 0.45),
+            "confidenceThreshold": MLFeatureValue(double: 0.30),
+        ])
+        model = vnModel
+        let req = VNCoreMLRequest(model: vnModel)
+        req.imageCropAndScaleOption = .scaleFit
+        request = req
     }
 
-    /// Xcode builds ship a precompiled .mlmodelc; xtool/SwiftPM builds copy the raw .mlmodel, compiled here on first launch.
-    private static func compiledModelURL() -> URL? {
+    /// Xcode builds ship a precompiled .mlmodelc; xtool/SwiftPM builds copy the raw .mlpackage, compiled here on first launch.
+    private static func modelURL(_ name: String) -> URL? {
         #if SWIFT_PACKAGE
         let bundle = Bundle.module
         #else
         let bundle = Bundle.main
         #endif
-        if let compiled = bundle.url(forResource: "YOLOv3Tiny", withExtension: "mlmodelc") { return compiled }
+        if let compiled = bundle.url(forResource: name, withExtension: "mlmodelc") { return compiled }
         for sub in [nil, "Resources"] as [String?] {
-            if let raw = bundle.url(forResource: "YOLOv3Tiny", withExtension: "mlmodel", subdirectory: sub) {
+            if let raw = bundle.url(forResource: name, withExtension: "mlpackage", subdirectory: sub) {
                 return try? MLModel.compileModel(at: raw)
             }
         }
         return nil
     }
 
-    func detect(_ image: CGImage, threshold: Float = 0.35) -> [Detection] {
-        let request = VNCoreMLRequest(model: model)
-        request.imageCropAndScaleOption = .scaleFill
+    func detect(_ image: CGImage) -> [Detection] {
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
         do { try handler.perform([request]) } catch { return [] }
         let observations = (request.results as? [VNRecognizedObjectObservation]) ?? []
         return observations.compactMap { o in
-            guard let top = o.labels.first, top.confidence >= threshold,
-                  let cls = VehicleClass.fromCoco(top.identifier) else { return nil }
+            guard let top = o.labels.first, let cls = VehicleClass.fromCoco(top.identifier) else { return nil }
             let b = o.boundingBox // normalized, origin bottom-left
             return Detection(
                 box: RectN(left: Float(b.minX), top: Float(1 - b.maxY), right: Float(b.maxX), bottom: Float(1 - b.minY)),

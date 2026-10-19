@@ -13,6 +13,18 @@ targets:
     platform: iOS
     sources:
       - path: Sources/FreeCountTraffic
+        excludes:
+          - "Resources/**"
+      # Core ML packages are folders: list them explicitly as single files so Xcode compiles them to .mlmodelc
+      - path: Sources/FreeCountTraffic/Resources/yolo11n.mlpackage
+        type: file
+        buildPhase: sources
+      - path: Sources/FreeCountTraffic/Resources/yolo11s.mlpackage
+        type: file
+        buildPhase: sources
+      - path: Sources/FreeCountTraffic/Resources/yolo11m.mlpackage
+        type: file
+        buildPhase: sources
     dependencies:
       - package: TrafficCorePackage
         product: TrafficCore

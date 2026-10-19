@@ -7,6 +7,8 @@ struct EngineSnapshot {
     var tracks: [Track]
     var events: [CountEvent]
     var fps: Double
+    /// Recent centre points (normalized) per track id, drawn as the trailing line.
+    var trails: [Int: [CGPoint]] = [:]
 }
 
 /// Detector -> tracker -> zone counter pipeline shared by every frame source. Thread-safe.
@@ -19,10 +21,14 @@ final class AnalysisEngine: @unchecked Sendable {
     private var enabled: Set<VehicleClass> = [.car, .truck, .bus, .motorcycle]
     private var lastFrameTime: TimeInterval = 0
     private var fpsEma: Double = 0
+    private var trailMap: [Int: [CGPoint]] = [:]
+    private let maxTrailPoints = 30
 
-    func loadModel() throws {
+    /// Loads (or swaps) the detection model.
+    func loadModel(_ kind: DetectionModel) throws {
+        let fresh = try VehicleDetector(kind) // heavy: build outside the lock
         lock.lock(); defer { lock.unlock() }
-        if detector == nil { detector = try VehicleDetector() }
+        detector = fresh
     }
 
     func configure(zones: [Zone], enabled: Set<VehicleClass>) {
@@ -44,13 +50,22 @@ final class AnalysisEngine: @unchecked Sendable {
         let aspect = Float(frame.width) / Float(frame.height)
         counter.update(zones: zones, frameAspect: aspect, active: result.active, removed: result.removed, tMs: tMs)
 
+        let alive = Set(result.active.map { $0.id })
+        for id in trailMap.keys where !alive.contains(id) { trailMap.removeValue(forKey: id) }
+        for t in result.active where t.lastSeenMs == tMs {
+            var pts = trailMap[t.id] ?? []
+            pts.append(CGPoint(x: CGFloat(t.box.cx), y: CGFloat(t.box.cy)))
+            if pts.count > maxTrailPoints { pts.removeFirst(pts.count - maxTrailPoints) }
+            trailMap[t.id] = pts
+        }
+
         let now = Date().timeIntervalSinceReferenceDate
         if lastFrameTime != 0 {
             let inst = 1.0 / max(now - lastFrameTime, 0.001)
             fpsEma = fpsEma == 0 ? inst : 0.8 * fpsEma + 0.2 * inst
         }
         lastFrameTime = now
-        return EngineSnapshot(frame: frame, tracks: result.active, events: counter.events, fps: fpsEma)
+        return EngineSnapshot(frame: frame, tracks: result.active, events: counter.events, fps: fpsEma, trails: trailMap)
     }
 
     func reset() {
@@ -59,6 +74,7 @@ final class AnalysisEngine: @unchecked Sendable {
         counter.reset()
         lastFrameTime = 0
         fpsEma = 0
+        trailMap.removeAll()
     }
 
     /// Flush vehicles still inside a zone and return every event of the session.
