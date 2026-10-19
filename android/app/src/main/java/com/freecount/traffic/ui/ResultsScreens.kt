@@ -93,7 +93,7 @@ fun GraphScreen(vm: AnalysisViewModel, id: Long, onBack: () -> Unit) {
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf(1, 5, 15, 60).forEach { m ->
-                    FilterChip(selected = intervalMin == m, onClick = { intervalMin = m }, label = { Text(if (m == 60) "1 hour" else "$m min") })
+                    FilterChip(selected = intervalMin == m, onClick = { intervalMin = m }, label = { Text("$m min") })
                 }
             }
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
