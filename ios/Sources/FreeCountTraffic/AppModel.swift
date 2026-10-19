@@ -2,6 +2,9 @@ import CoreLocation
 import Foundation
 import SwiftUI
 import TrafficCore
+#if canImport(UIKit)
+import UIKit
+#endif
 
 enum SourceKind: String, Hashable {
     case camera, video
@@ -15,6 +18,28 @@ final class Flag: @unchecked Sendable {
         get { lock.lock(); defer { lock.unlock() }; return stored }
         set { lock.lock(); stored = newValue; lock.unlock() }
     }
+}
+
+/// Lets through at most one UI update every `minGap` seconds and none while the previous one is still waiting for
+/// the main thread, so fast detection never floods the UI (which made button taps get lost).
+final class UiGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let minGap: TimeInterval
+    private var busy = false
+    private var last = Date.distantPast
+
+    init(minGap: TimeInterval) { self.minGap = minGap }
+
+    func tryEnter() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        let now = Date()
+        if busy || now.timeIntervalSince(last) < minGap { return false }
+        busy = true
+        last = now
+        return true
+    }
+
+    func leave() { lock.lock(); busy = false; lock.unlock() }
 }
 
 final class OneShotLocation: NSObject, CLLocationManagerDelegate {
@@ -67,6 +92,8 @@ final class AppModel: ObservableObject {
 
     let engine = AnalysisEngine()
     private let countingFlag = Flag()
+    private let frameGate = UiGate(minGap: 1.0 / 30)
+    private let progressGate = UiGate(minGap: 0.25)
     private var nextZoneId = 2
     private var source: SourceKind = .camera
     private var startedAt = Date()
@@ -163,10 +190,12 @@ final class AppModel: ObservableObject {
     private func startCamera() {
         let engine = engine
         let flag = countingFlag
+        let gate = frameGate
         camera.start(
             onFrame: { [weak self] frame, t in
                 let snap = engine.process(frame, tMs: t, counting: flag.value)
-                Task { @MainActor in self?.snapshot = snap }
+                guard gate.tryEnter() else { return }
+                Task { @MainActor in self?.snapshot = snap; gate.leave() }
             },
             onError: { [weak self] text in Task { @MainActor in self?.message = text } }
         )
@@ -197,6 +226,7 @@ final class AppModel: ObservableObject {
         message = nil
         running = true
         countingFlag.value = true
+        setScreenAlwaysOn(true)
         fetchLocation()
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -206,15 +236,21 @@ final class AppModel: ObservableObject {
         }
         if source == .video, let url = videoURL {
             let engine = engine
+            let gate = frameGate
+            let pGate = progressGate
             videoTask = Task.detached { [weak self] in
                 do {
                     try await VideoSource.run(
                         url: url,
                         process: { frame, t in
                             let snap = engine.process(frame, tMs: t, counting: true)
-                            Task { @MainActor in self?.snapshot = snap }
+                            guard gate.tryEnter() else { return }
+                            Task { @MainActor in self?.snapshot = snap; gate.leave() }
                         },
-                        onProgress: { p in Task { @MainActor in self?.progress = p } }
+                        onProgress: { p in
+                            guard p >= 1 || pGate.tryEnter() else { return }
+                            Task { @MainActor in self?.progress = p; pGate.leave() }
+                        }
                     )
                 } catch is CancellationError {
                 } catch {
@@ -235,6 +271,7 @@ final class AppModel: ObservableObject {
         guard running else { return }
         running = false
         countingFlag.value = false
+        setScreenAlwaysOn(false)
         timer?.invalidate()
         timer = nil
         let aspect = snapshot.map { Float($0.frame.width) / Float($0.frame.height) } ?? 16.0 / 9.0
@@ -254,6 +291,13 @@ final class AppModel: ObservableObject {
         sessions.insert(record, at: 0)
         store.save(sessions)
         message = "Saved \(events.count) vehicles to History."
+    }
+
+    /// Keeps the screen from auto-locking while counting: a locked screen suspends the app and cuts the analysis short.
+    private func setScreenAlwaysOn(_ on: Bool) {
+        #if canImport(UIKit)
+        UIApplication.shared.isIdleTimerDisabled = on
+        #endif
     }
 
     func deleteSession(_ id: UUID) {

@@ -84,7 +84,10 @@ final class CameraSource: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
 }
 
 enum VideoSource {
+    /// When the device falls behind real time, still analyse at least one frame per `stepMs` of video (tracking needs it).
     static let stepMs: Int64 = 100
+    /// Never analyse more than ~33 frames per second of video.
+    static let minGapMs: Int64 = 30
 
     /// First frame of the video, to place boxes before the run.
     static func firstFrame(_ url: URL) async -> CGImage? {
@@ -101,8 +104,10 @@ enum VideoSource {
         return .up
     }
 
-    /// Decodes the video sequentially (fast, hardware decoder) and hands every `stepMs` a frame to `process`.
+    /// Plays the video at real speed through the hardware decoder, like a live camera: frames the device has no time
+    /// for are dropped, but never more than `stepMs` apart (a slow device then plays slower than real time).
     /// Timestamps are the real presentation times, so speed estimates do not depend on how fast the device processes.
+    /// If iOS interrupts the reader (app sent to background, screen locked), reading resumes where it stopped.
     static func run(
         url: URL,
         process: @Sendable (CGImage, Int64) -> Void,
@@ -116,28 +121,62 @@ enum VideoSource {
         let transform = try await track.load(.preferredTransform)
         let orient = orientation(transform)
 
-        let reader = try AVAssetReader(asset: asset)
-        let output = AVAssetReaderTrackOutput(
-            track: track,
-            outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
-        )
-        output.alwaysCopiesSampleData = false
-        reader.add(output)
-        guard reader.startReading() else {
-            throw reader.error ?? NSError(domain: "VideoSource", code: 2, userInfo: [NSLocalizedDescriptionKey: "Could not read the video."])
-        }
+        var lastMs: Int64 = -stepMs
+        var originMs: Int64?
+        var clockStart = Date()
+        var retries = 0
 
-        var nextMs: Int64 = 0
-        while let sample = output.copyNextSampleBuffer() {
+        while true {
+            let reader = try AVAssetReader(asset: asset)
+            if lastMs > 0 {
+                reader.timeRange = CMTimeRange(start: CMTime(value: lastMs + 1, timescale: 1000), duration: .positiveInfinity)
+            }
+            let output = AVAssetReaderTrackOutput(
+                track: track,
+                outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+            )
+            output.alwaysCopiesSampleData = false
+            reader.add(output)
+            guard reader.startReading() else {
+                throw reader.error ?? NSError(domain: "VideoSource", code: 2, userInfo: [NSLocalizedDescriptionKey: "Could not read the video."])
+            }
+
+            while let sample = output.copyNextSampleBuffer() {
+                try Task.checkCancellation()
+                let ms = Int64(CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample)) * 1000)
+                if ms < lastMs + minGapMs { continue }
+
+                let now = Date()
+                if originMs == nil { originMs = ms; clockStart = now }
+                let videoElapsed = ms - (originMs ?? ms)
+                let wallElapsed = Int64(now.timeIntervalSince(clockStart) * 1000)
+                if videoElapsed < wallElapsed {
+                    // behind real time: drop this frame unless tracking would get too sparse
+                    if ms < lastMs + stepMs { continue }
+                    // do not race to catch up afterwards
+                    if wallElapsed - videoElapsed > 250 { clockStart = now.addingTimeInterval(-Double(videoElapsed) / 1000) }
+                } else if videoElapsed > wallElapsed {
+                    try await Task.sleep(nanoseconds: UInt64(videoElapsed - wallElapsed) * 1_000_000)
+                }
+
+                guard let buffer = CMSampleBufferGetImageBuffer(sample),
+                      let cg = makeFrame(CIImage(cvPixelBuffer: buffer).oriented(orient)) else { continue }
+                process(cg, ms)
+                onProgress(min(Double(ms) / Double(totalMs), 1))
+                lastMs = ms
+            }
             try Task.checkCancellation()
-            let ms = Int64(CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sample)) * 1000)
-            if ms < nextMs { continue }
-            guard let buffer = CMSampleBufferGetImageBuffer(sample),
-                  let cg = makeFrame(CIImage(cvPixelBuffer: buffer).oriented(orient)) else { continue }
-            process(cg, ms)
-            onProgress(min(Double(ms) / Double(totalMs), 1))
-            nextMs = ms + stepMs
+
+            if reader.status == .failed {
+                // usually the app is in the background: wait (up to ~2 min) until it can read again
+                retries += 1
+                if retries > 120 { throw reader.error ?? NSError(domain: "VideoSource", code: 3) }
+                originMs = nil
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                continue
+            }
+            onProgress(1)
+            return
         }
-        if reader.status == .failed, let e = reader.error { throw e }
     }
 }
