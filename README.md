@@ -18,6 +18,10 @@ Push to GitHub. The workflow in `.github/workflows/android.yml`:
 2. boots an Android emulator, installs the app, runs the instrumented smoke tests (model loads and runs on x86_64,
    screens render, RTSP URL validation) and uploads screenshots (artifact `emulator-screenshots-and-logs`).
 
+To get the APK: open the run in the repo's **Actions** tab and download `FreeCountTraffic-debug-apk`, or push a
+tag (`git tag v0.1.0 && git push origin v0.1.0`) and the APK is attached to a GitHub Release. It is signed with the
+debug key, which is fine for sideloading and testing.
+
 The detection model is downloaded by Gradle on the first build (`downloadModel` task in `app/build.gradle.kts`).
 
 ## Limits to know
