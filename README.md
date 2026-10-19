@@ -5,7 +5,7 @@ vehicles that cross a box are counted by class and direction, and their speed is
 
 - **Sources:** live camera (CameraX), video file, RTSP stream (Media3).
 - **Detection:** EfficientDet-Lite0 (COCO) through MediaPipe Tasks; car, truck, bus, motorcycle, bicycle, person.
-- **Tracking / counting / speed:** pure Kotlin in `app/src/main/java/com/freecount/traffic/core` (unit-tested on the JVM).
+- **Tracking / counting / speed:** pure Kotlin in `android/app/src/main/java/com/freecount/traffic/core` (unit-tested on the JVM).
 - **Speed:** set the real length (m) of a zone's long side; speed = length x fraction travelled / time inside.
   Video frames are read at exact timestamps (10 fps), so speed does not depend on device performance.
 - **Results:** per-zone totals by class and direction, average/max speed, history in Room, export CSV and PDF.
@@ -22,7 +22,7 @@ To get the APK: open the run in the repo's **Actions** tab and download `FreeCou
 tag (`git tag v0.1.0 && git push origin v0.1.0`) and the APK is attached to a GitHub Release. It is signed with the
 debug key, which is fine for sideloading and testing.
 
-The detection model is downloaded by Gradle on the first build (`downloadModel` task in `app/build.gradle.kts`).
+The detection model is downloaded by Gradle on the first build (`downloadModel` task in `android/app/build.gradle.kts`).
 
 ## Limits to know
 

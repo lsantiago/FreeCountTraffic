@@ -4,6 +4,6 @@ local.properties
 *.iml
 .idea/
 captures/
-app/src/main/assets/*.tflite
+*.tflite
 screenshots/
 .claude/

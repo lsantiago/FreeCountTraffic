@@ -2,7 +2,6 @@ package com.freecount.traffic
 
 import android.graphics.Bitmap
 import android.graphics.Color
-import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
