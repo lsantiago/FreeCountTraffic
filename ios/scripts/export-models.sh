@@ -20,7 +20,8 @@ python3 -m venv "$WORK/venv"
 # shellcheck disable=SC1091
 source "$WORK/venv/bin/activate"
 pip install --quiet --upgrade pip
-pip install --quiet ultralytics coremltools
+# numpy 2.4+ breaks coremltools int-op conversion ("only 0-dimensional arrays can be converted to Python scalars").
+pip install --quiet ultralytics coremltools "numpy>=1.23,<=2.3.5"
 
 cd "$WORK"
 for n in n s m; do
