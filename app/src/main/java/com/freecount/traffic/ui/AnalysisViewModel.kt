@@ -51,7 +51,8 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
     var rtspUrl by mutableStateOf("")
 
     private var source = SourceType.CAMERA
-    private var startedAt = 0L
+    var startedAt = 0L
+        private set
     private var latitude: Double? = null
     private var longitude: Double? = null
     private var job: Job? = null

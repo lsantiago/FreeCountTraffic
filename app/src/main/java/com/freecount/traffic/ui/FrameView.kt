@@ -29,19 +29,6 @@ import com.freecount.traffic.core.Track
 import com.freecount.traffic.core.VehicleClass
 import com.freecount.traffic.core.Zone
 
-private val ZONE_COLORS = listOf(
-    Color(0xFFFFC107), Color(0xFF03A9F4), Color(0xFFE91E63), Color(0xFF8BC34A), Color(0xFFFF5722),
-)
-
-private fun classColor(c: VehicleClass) = when (c) {
-    VehicleClass.CAR -> Color(0xFF4CAF50)
-    VehicleClass.TRUCK -> Color(0xFFFF9800)
-    VehicleClass.BUS -> Color(0xFFF44336)
-    VehicleClass.MOTORCYCLE -> Color(0xFF9C27B0)
-    VehicleClass.BICYCLE -> Color(0xFF00BCD4)
-    VehicleClass.PERSON -> Color(0xFFFFFFFF)
-}
-
 private const val HANDLE = 0.07f
 private const val MIN_SIZE = 0.04f
 
@@ -55,8 +42,10 @@ fun FrameView(
     onSelect: (Int) -> Unit,
     onRectChange: (Int, RectN) -> Unit,
     modifier: Modifier = Modifier,
+    counts: Map<Int, Int> = emptyMap(),
     background: @Composable () -> Unit = {},
 ) {
+    val countsNow by rememberUpdatedState(counts)
     val aspect = frame?.let { it.width / it.height.toFloat() } ?: (16f / 9f)
     val image = remember(frame) { frame?.asImageBitmap() }
     val zonesNow by rememberUpdatedState(zones)
@@ -123,21 +112,49 @@ fun FrameView(
                 textSize = 13f * density
                 setShadowLayer(3f, 0f, 0f, android.graphics.Color.BLACK)
             }
+            val cornerPx = 6f * density
             for (t in tracksNow) {
-                val c = classColor(t.cls)
-                drawRect(c, Offset(t.box.left * w, t.box.top * h), Size(t.box.width * w, t.box.height * h), style = Stroke(2f * density))
+                val c = Palette.cls(t.cls)
+                drawRoundRect(
+                    c, Offset(t.box.left * w, t.box.top * h), Size(t.box.width * w, t.box.height * h),
+                    cornerRadius = androidx.compose.ui.geometry.CornerRadius(cornerPx), style = Stroke(1.5f * density),
+                )
+                // small class tag, like the reference app's "car" / "truck" labels
+                text.textSize = 10f * density
+                val tag = t.cls.label.lowercase()
+                val tw = text.measureText(tag) + 8f * density
+                val tx = t.box.left * w
+                val ty = t.box.top * h - 14f * density
+                drawRoundRect(c.copy(alpha = 0.9f), Offset(tx, ty), Size(tw, 13f * density), androidx.compose.ui.geometry.CornerRadius(3f * density))
                 text.color = android.graphics.Color.WHITE
-                drawContext.canvas.nativeCanvas.drawText("${t.cls.label} #${t.id}", t.box.left * w, t.box.top * h - 4f * density, text)
+                drawContext.canvas.nativeCanvas.drawText(tag, tx + 4f * density, ty + 10.5f * density, text)
             }
             for ((i, z) in zonesNow.withIndex()) {
-                val c = ZONE_COLORS[i % ZONE_COLORS.size]
+                val c = Palette.zone(i)
+                val selected = z.id == selectedNow
                 val tl = Offset(z.rect.left * w, z.rect.top * h)
                 val sz = Size(z.rect.width * w, z.rect.height * h)
-                drawRect(c.copy(alpha = if (z.id == selectedNow) 0.22f else 0.10f), tl, sz)
-                drawRect(c, tl, sz, style = Stroke((if (z.id == selectedNow) 3f else 2f) * density))
+                drawRoundRect(c.copy(alpha = if (selected) 0.40f else 0.28f), tl, sz, androidx.compose.ui.geometry.CornerRadius(cornerPx))
+                drawRoundRect(c, tl, sz, androidx.compose.ui.geometry.CornerRadius(cornerPx), style = Stroke((if (selected) 3f else 2f) * density))
+
+                // big count badge in the middle of the box
+                val count = (countsNow[z.id] ?: 0).toString()
+                text.textSize = 16f * density
+                text.isFakeBoldText = true
+                val bw = text.measureText(count) + 16f * density
+                val bh = 26f * density
+                val bx = tl.x + (sz.width - bw) / 2f
+                val by = tl.y + (sz.height - bh) / 2f
+                drawRoundRect(Color(0xAA202020), Offset(bx, by), Size(bw, bh), androidx.compose.ui.geometry.CornerRadius(8f * density))
                 text.color = android.graphics.Color.WHITE
-                drawContext.canvas.nativeCanvas.drawText(z.name, tl.x + 4f * density, tl.y + 15f * density, text)
-                if (z.id == selectedNow) {
+                drawContext.canvas.nativeCanvas.drawText(count, bx + 8f * density, by + 19f * density, text)
+                text.isFakeBoldText = false
+
+                text.textSize = 12f * density
+                text.color = android.graphics.Color.WHITE
+                drawContext.canvas.nativeCanvas.drawText(z.name, tl.x + 6f * density, tl.y + 15f * density, text)
+                if (selected) {
+                    drawCircle(Color.White, 9f * density, Offset(z.rect.right * w, z.rect.bottom * h))
                     drawCircle(c, 7f * density, Offset(z.rect.right * w, z.rect.bottom * h))
                 }
             }

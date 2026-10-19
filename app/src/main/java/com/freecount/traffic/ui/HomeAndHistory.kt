@@ -1,19 +1,23 @@
 package com.freecount.traffic.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -26,11 +30,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.freecount.traffic.core.CountEvent
-import com.freecount.traffic.core.Summary
 import com.freecount.traffic.data.Exporter
 import com.freecount.traffic.data.SessionEntity
 import com.freecount.traffic.data.ZoneJson
@@ -40,23 +46,52 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
+import java.util.Locale
+
+@Composable
+private fun TopBar(title: String, onBack: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = onBack) { Text("‹ Back", style = MaterialTheme.typography.titleSmall) }
+        Text(title, Modifier.weight(1f), textAlign = TextAlign.Center, style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.width(72.dp))
+    }
+}
+
+@Composable
+private fun SourceCard(title: String, subtitle: String, onClick: () -> Unit) {
+    Column(
+        Modifier.fillMaxWidth()
+            .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(18.dp),
+    ) {
+        Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+    }
+}
 
 @Composable
 fun HomeScreen(onSource: (SourceType) -> Unit, onHistory: () -> Unit) {
     Column(
-        Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
+        Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Free Count Traffic", style = MaterialTheme.typography.headlineMedium)
         Text(
-            "Count vehicles and estimate their speed with on-device AI. Draw counting boxes on the image " +
-                "and press start. Nothing is uploaded: no video or photo is stored, only counts.",
+            "Count vehicles and estimate their speed with on-device AI. Draw boxes on the image and press start. " +
+                "Nothing is uploaded: no video or photo is stored, only counts.",
             style = MaterialTheme.typography.bodyMedium,
         )
-        Button(onClick = { onSource(SourceType.CAMERA) }, modifier = Modifier.fillMaxWidth()) { Text("Camera") }
-        Button(onClick = { onSource(SourceType.VIDEO) }, modifier = Modifier.fillMaxWidth()) { Text("Video file") }
-        Button(onClick = { onSource(SourceType.RTSP) }, modifier = Modifier.fillMaxWidth()) { Text("RTSP stream") }
-        OutlinedButton(onClick = onHistory, modifier = Modifier.fillMaxWidth()) { Text("History") }
+        Spacer(Modifier.height(8.dp))
+        // The visible titles are the plain source names; the subtitles explain each one.
+        Button(onClick = { onSource(SourceType.CAMERA) }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("Camera") }
+        Text("Use the back camera of this phone, mounted still on a tripod or window.", style = MaterialTheme.typography.bodySmall)
+        Button(onClick = { onSource(SourceType.VIDEO) }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("Video file") }
+        Text("Analyse a recorded video. Speed uses exact video timestamps.", style = MaterialTheme.typography.bodySmall)
+        Button(onClick = { onSource(SourceType.RTSP) }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("RTSP stream") }
+        Text("Connect an IP camera or drone (Reolink, Hikvision, Axis, DJI…).", style = MaterialTheme.typography.bodySmall)
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(onClick = onHistory, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("History") }
     }
 }
 
@@ -64,24 +99,24 @@ fun HomeScreen(onSource: (SourceType) -> Unit, onHistory: () -> Unit) {
 fun HistoryScreen(vm: AnalysisViewModel, onBack: () -> Unit, onOpen: (Long) -> Unit) {
     val sessions by vm.sessions.collectAsState(initial = emptyList())
     Column(Modifier.fillMaxSize().systemBarsPadding()) {
-        Row(Modifier.padding(horizontal = 8.dp)) {
-            TextButton(onClick = onBack) { Text("‹ Back") }
-            Text("History", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 12.dp))
-        }
+        TopBar("History", onBack)
         if (sessions.isEmpty()) {
             Text("No sessions yet.", modifier = Modifier.padding(20.dp))
         }
         LazyColumn(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             items(sessions, key = { it.id }) { s ->
-                Card(Modifier.fillMaxWidth().clickable { onOpen(s.id) }) {
-                    Column(Modifier.padding(14.dp)) {
-                        Text(s.name, style = MaterialTheme.typography.titleSmall)
-                        Text(
-                            "${s.source.lowercase()} · ${s.durationMs / 1000} s · " +
-                                DateFormat.getDateTimeInstance().format(Date(s.startedAt)),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
+                Column(
+                    Modifier.fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(14.dp))
+                        .clickable { onOpen(s.id) }
+                        .padding(14.dp),
+                ) {
+                    Text(s.name, style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "${s.source.lowercase()} · ${s.durationMs / 1000} s · " +
+                            DateFormat.getDateTimeInstance().format(Date(s.startedAt)),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
             }
         }
@@ -96,30 +131,35 @@ fun SessionDetailScreen(vm: AnalysisViewModel, id: Long, onBack: () -> Unit) {
     LaunchedEffect(id) { data = vm.sessionWithEvents(id) }
 
     Column(
-        Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(bottom = 24.dp),
+        Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(bottom = 28.dp),
     ) {
-        TextButton(onClick = onBack, modifier = Modifier.padding(horizontal = 8.dp)) { Text("‹ Back") }
+        TopBar("Tracking Results", onBack)
         val (session, events) = data ?: run {
             Text("Loading…", Modifier.padding(20.dp))
             return@Column
         }
-        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(session.name, style = MaterialTheme.typography.titleLarge)
-            Text("Source: ${session.source.lowercase()} · ${session.durationMs / 1000} s")
-            if (session.latitude != null && session.longitude != null) {
-                Text(String.format(java.util.Locale.US, "Location: %.5f, %.5f", session.latitude, session.longitude))
+        val zones = ZoneJson.decode(session.zonesJson)
+        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(session.name, Modifier.fillMaxWidth(), textAlign = TextAlign.Center, style = MaterialTheme.typography.titleLarge)
+            ResultsPanel(events, zones)
+
+            val meta = buildString {
+                append(DateFormat.getDateTimeInstance().format(Date(session.startedAt)))
+                append("\nDuration: ${session.durationMs / 1000} s · ${session.source.lowercase()}")
+                if (session.latitude != null && session.longitude != null) {
+                    append(String.format(Locale.US, "\nLocation: %.5f, %.5f", session.latitude, session.longitude))
+                }
             }
-            Text("Total: ${events.size}", style = MaterialTheme.typography.titleSmall)
-            Summary.of(events, ZoneJson.decode(session.zonesJson)).forEach { Text(Summary.line(it)) }
+            Text(meta, Modifier.fillMaxWidth().padding(vertical = 8.dp), textAlign = TextAlign.Center, style = MaterialTheme.typography.bodySmall)
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = {
+                Button(shape = RoundedCornerShape(12.dp), onClick = {
                     scope.launch {
                         val f = withContext(Dispatchers.IO) { Exporter.csv(ctx, session, events) }
                         Exporter.share(ctx, f, "text/csv")
                     }
                 }) { Text("Export CSV") }
-                Button(onClick = {
+                Button(shape = RoundedCornerShape(12.dp), onClick = {
                     scope.launch {
                         val f = withContext(Dispatchers.IO) { Exporter.pdf(ctx, session, events) }
                         Exporter.share(ctx, f, "application/pdf")
@@ -128,12 +168,13 @@ fun SessionDetailScreen(vm: AnalysisViewModel, id: Long, onBack: () -> Unit) {
             }
             TextButton(onClick = { vm.deleteSession(id); onBack() }) { Text("Delete session") }
 
-            Text("Vehicles", style = MaterialTheme.typography.titleSmall)
+            Text("Vehicles", style = MaterialTheme.typography.titleMedium)
             events.forEach {
-                val speed = it.speedKmh?.let { s -> String.format(java.util.Locale.US, " · %.0f km/h", s) } ?: ""
+                val speed = it.speedKmh?.let { s -> String.format(Locale.US, " · %.0f km/h", s) } ?: ""
                 Text(
-                    String.format(java.util.Locale.US, "%.1fs  %s  %s %s%s", it.timeMs / 1000.0, it.zoneName, it.cls.label, it.direction, speed),
+                    String.format(Locale.US, "%.1fs  %s  %s %s%s", it.timeMs / 1000.0, it.zoneName, it.cls.label, it.direction, speed),
                     style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.Normal,
                 )
             }
         }

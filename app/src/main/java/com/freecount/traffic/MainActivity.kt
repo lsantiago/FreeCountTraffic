@@ -5,12 +5,8 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -27,6 +23,7 @@ import com.freecount.traffic.ui.AnalysisViewModel
 import com.freecount.traffic.ui.HistoryScreen
 import com.freecount.traffic.ui.HomeScreen
 import com.freecount.traffic.ui.SessionDetailScreen
+import com.freecount.traffic.ui.TrafficTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -35,7 +32,7 @@ class MainActivity : ComponentActivity() {
         val autotestVideo = intent.getStringExtra("autotest_video")
         val autotestZones = intent.getStringExtra("autotest_zones")
         setContent {
-            MaterialTheme(colorScheme = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()) {
+            TrafficTheme {
                 Surface(Modifier.fillMaxSize()) { AppRoot(autotestVideo, autotestZones) }
             }
         }

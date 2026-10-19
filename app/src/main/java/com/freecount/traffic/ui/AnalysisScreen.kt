@@ -8,14 +8,21 @@ import android.os.SystemClock
 import android.view.TextureView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -33,11 +40,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -47,15 +58,20 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
-import com.freecount.traffic.core.Summary
 import com.freecount.traffic.core.VehicleClass
 import com.freecount.traffic.source.CameraSource
-import com.freecount.traffic.source.SourceType
 import com.freecount.traffic.source.FRAME_WIDTH
+import com.freecount.traffic.source.SourceType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
+import java.util.Locale
+
+private fun clock(ms: Long): String {
+    val s = ms / 1000
+    return String.format(Locale.US, "%02d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60)
+}
 
 @kotlin.OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
@@ -64,7 +80,7 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
     val state by vm.engine.state.collectAsState()
     val zones by vm.zones.collectAsState()
 
-    androidx.compose.runtime.LaunchedEffect(source) { vm.selectSource(source) }
+    LaunchedEffect(source) { vm.selectSource(source) }
 
     // Optional location permission (stored with the session).
     val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
@@ -82,22 +98,32 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
     }
     DisposableEffect(Unit) { onDispose { tone?.release() } }
 
-    Column(
-        Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(bottom = 24.dp),
-    ) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-            TextButton(onClick = { if (vm.running) vm.stop(); onBack() }) { Text("‹ Back") }
+    val elapsed by produceState(0L, vm.running) {
+        while (vm.running) {
+            value = System.currentTimeMillis() - vm.startedAt
+            delay(500)
+        }
+    }
+
+    val countsByZone = remember(state.events) { state.events.groupingBy { it.zoneId }.eachCount() }
+
+    Column(Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(bottom = 28.dp)) {
+        // --- top bar: ‹ Back | title ---
+        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextButton(onClick = { if (vm.running) vm.stop(); onBack() }) { Text("‹ Back", style = MaterialTheme.typography.titleSmall) }
             Text(
                 when (source) {
-                    SourceType.CAMERA -> "Live camera"
-                    SourceType.VIDEO -> "Video file"
-                    SourceType.RTSP -> "RTSP stream"
+                    SourceType.CAMERA -> "Live Camera"
+                    SourceType.VIDEO -> "Video File"
+                    SourceType.RTSP -> "RTSP Stream"
                 },
                 style = MaterialTheme.typography.titleMedium,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.weight(1f),
             )
+            Spacer(Modifier.width(72.dp))
         }
 
-        // --- frame source specific content ---
         var rtspTexture by remember { mutableStateOf<TextureView?>(null) }
         var rtspActive by remember { mutableStateOf<String?>(null) }
 
@@ -111,6 +137,7 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
             selectedId = vm.selectedZoneId,
             onSelect = { vm.selectedZoneId = it },
             onRectChange = vm::setRect,
+            counts = countsByZone,
             background = {
                 if (source == SourceType.RTSP && rtspActive != null) {
                     RtspPlayerView(rtspActive!!, onTexture = { rtspTexture = it }, onError = { vm.message = it })
@@ -118,13 +145,9 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
             },
         )
 
-        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (!vm.modelReady) Text("Loading detection model…", style = MaterialTheme.typography.bodySmall)
-            vm.message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
-            Text(
-                "Drag a zone to move it, drag its corner dot to resize. A vehicle is counted when it crosses the zone.",
-                style = MaterialTheme.typography.bodySmall,
-            )
+            vm.message?.let { Text(it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium) }
 
             // --- source controls ---
             when (source) {
@@ -132,7 +155,7 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
                     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
                         if (uri != null) vm.loadVideo(uri)
                     }
-                    OutlinedButton(onClick = { picker.launch("video/*") }, enabled = !vm.running) {
+                    OutlinedButton(onClick = { picker.launch("video/*") }, enabled = !vm.running, modifier = Modifier.fillMaxWidth()) {
                         Text(if (vm.videoUri == null) "Choose video…" else "Choose another video…")
                     }
                     vm.progress?.let { if (vm.running) LinearProgressIndicator(progress = { it }, modifier = Modifier.fillMaxWidth()) }
@@ -145,9 +168,10 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    Button(
+                    OutlinedButton(
                         onClick = { rtspActive = vm.rtspUrl.trim().takeIf { it.startsWith("rtsp://") } ?: run { vm.message = "URL must start with rtsp://"; null } },
                         enabled = !vm.running,
+                        modifier = Modifier.fillMaxWidth(),
                     ) { Text(if (rtspActive == null) "Connect" else "Reconnect") }
                 }
                 SourceType.CAMERA -> {}
@@ -158,28 +182,54 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
                 SourceType.VIDEO -> vm.videoUri != null
                 SourceType.RTSP -> rtspActive != null
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+            // Big orange action button (shows elapsed time while counting).
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 if (!vm.running) {
-                    Button(onClick = { vm.start() }, enabled = canStart) { Text("Start counting") }
+                    Button(onClick = { vm.start() }, enabled = canStart, shape = RoundedCornerShape(12.dp)) {
+                        Text("Start counting", Modifier.padding(horizontal = 18.dp, vertical = 2.dp), fontWeight = FontWeight.SemiBold)
+                    }
                 } else {
-                    Button(onClick = { vm.stop() }) { Text("Stop & save") }
+                    Button(onClick = { vm.stop() }, shape = RoundedCornerShape(12.dp)) {
+                        Text("■  Stop - ${clock(elapsed)}", Modifier.padding(horizontal = 18.dp, vertical = 2.dp), fontWeight = FontWeight.SemiBold)
+                    }
                 }
-                if (vm.running && state.fps > 0f) Text(String.format("%.1f fps", state.fps))
+            }
+            if (vm.running && state.fps > 0f) {
+                Text(String.format(Locale.US, "%.1f fps", state.fps), Modifier.fillMaxWidth(), textAlign = TextAlign.Center, style = MaterialTheme.typography.bodySmall)
             }
 
-            // --- zones ---
-            Text("Zones", style = MaterialTheme.typography.titleSmall)
-            androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                zones.forEach { z ->
-                    FilterChip(selected = z.id == vm.selectedZoneId, onClick = { vm.selectedZoneId = z.id }, label = { Text(z.name) })
+            // --- Boxes list (live) ---
+            Spacer(Modifier.height(4.dp))
+            Text("Boxes", style = MaterialTheme.typography.titleLarge)
+            zones.forEachIndexed { i, z ->
+                val selected = z.id == vm.selectedZoneId
+                val byClass = state.events.filter { it.zoneId == z.id }.groupingBy { it.cls }.eachCount()
+                Row(
+                    Modifier.fillMaxWidth()
+                        .background(if (selected) MaterialTheme.colorScheme.primaryContainer else androidx.compose.ui.graphics.Color.Transparent, RoundedCornerShape(10.dp))
+                        .clickable { vm.selectedZoneId = z.id }
+                        .padding(horizontal = 10.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Swatch(Palette.zone(i))
+                    Spacer(Modifier.width(10.dp))
+                    Text(z.name, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                    if (byClass.isEmpty()) Text("0", style = MaterialTheme.typography.bodyMedium) else ClassChips(byClass)
                 }
-                OutlinedButton(onClick = { vm.addZone() }) { Text("+ Zone") }
             }
+            OutlinedButton(onClick = { vm.addZone() }, shape = RoundedCornerShape(12.dp)) { Text("+ Add box") }
+            Text(
+                "Drag a box to move it, drag its white corner dot to resize. A vehicle is counted when it crosses the box.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            // --- selected box settings ---
             zones.firstOrNull { it.id == vm.selectedZoneId }?.let { z ->
                 var lengthText by remember(z.id) { mutableStateOf(z.lengthMeters?.let { l -> l.toString().removeSuffix(".0") } ?: "") }
+                Text("Box settings", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
                 OutlinedTextField(
                     value = z.name, onValueChange = { vm.rename(z.id, it) },
-                    label = { Text("Zone name") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Name") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
                 )
                 OutlinedTextField(
                     value = lengthText,
@@ -187,29 +237,30 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
                         lengthText = t
                         vm.setLength(z.id, t.replace(',', '.').toFloatOrNull()?.takeIf { it > 0f })
                     },
-                    label = { Text("Zone length in meters (enables speed)") },
-                    supportingText = { Text("Real distance covered by the zone's long side.") },
+                    label = { Text("Box length in meters (enables speed)") },
+                    supportingText = { Text("Real distance covered by the box's long side.") },
                     singleLine = true, modifier = Modifier.fillMaxWidth(),
                 )
                 if (zones.size > 1) TextButton(onClick = { vm.deleteZone(z.id) }) { Text("Delete ${z.name}") }
             }
 
             // --- what to count ---
-            Text("Count", style = MaterialTheme.typography.titleSmall)
+            Text("Count", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
             androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 VehicleClass.entries.forEach { c ->
                     FilterChip(selected = c in vm.enabledClasses, onClick = { vm.toggleClass(c) }, label = { Text(c.label) })
                 }
             }
-            Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Switch(checked = vm.soundOn, onCheckedChange = { vm.soundOn = it })
                 Text("Beep when a vehicle is counted")
             }
 
             // --- live results ---
-            Text("Results", style = MaterialTheme.typography.titleSmall)
-            Text("Total: ${state.events.size}")
-            Summary.of(state.events, zones).forEach { Text(Summary.line(it)) }
+            if (state.events.isNotEmpty()) {
+                Text("Results", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 8.dp))
+                ResultsPanel(state.events, zones)
+            }
         }
     }
 }
