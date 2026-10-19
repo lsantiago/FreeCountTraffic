@@ -276,6 +276,17 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
                 Switch(checked = vm.saveImages, onCheckedChange = { vm.setSaveImagesOn(it) })
                 Text("Save object images for Validate Detections (first ${com.freecount.traffic.ml.AnalysisEngine.MAX_THUMBNAILS})")
             }
+            Text("Detection model (higher accuracy is slower)", style = MaterialTheme.typography.bodyMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                com.freecount.traffic.ml.DetectionModel.entries.forEach { m ->
+                    FilterChip(
+                        selected = vm.detectionModel == m,
+                        onClick = { vm.chooseDetectionModel(m) },
+                        enabled = !vm.running,
+                        label = { Text(m.title) },
+                    )
+                }
+            }
             Text("Confidence threshold: ${(vm.confidence * 100).roundToInt()} %", style = MaterialTheme.typography.bodyMedium)
             Slider(
                 value = vm.confidence,

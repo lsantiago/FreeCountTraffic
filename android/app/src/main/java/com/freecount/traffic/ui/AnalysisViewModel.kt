@@ -17,6 +17,7 @@ import com.freecount.traffic.data.SessionEntity
 import com.freecount.traffic.data.ThumbStore
 import com.freecount.traffic.data.ZoneJson
 import com.freecount.traffic.ml.AnalysisEngine
+import com.freecount.traffic.ml.DetectionModel
 import com.freecount.traffic.source.SourceType
 import com.freecount.traffic.source.VideoSource
 import com.google.android.gms.location.LocationServices
@@ -104,9 +105,28 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
         engine.zones = _zones.value
         engine.confidence = confidence
         engine.saveImages = saveImages
+        loadDetector()
+    }
+
+    /** Settings: Balanced (YOLO11s) or Fastest (YOLO11n). */
+    var detectionModel by mutableStateOf(
+        runCatching { DetectionModel.valueOf(prefs.getString("detectionModel", "") ?: "") }.getOrDefault(DetectionModel.BALANCED),
+    )
+        private set
+
+    fun chooseDetectionModel(model: DetectionModel) {
+        if (running || model == detectionModel) return
+        detectionModel = model
+        prefs.edit().putString("detectionModel", model.name).apply()
+        loadDetector()
+    }
+
+    private fun loadDetector() {
+        modelReady = false
+        val model = runCatching { DetectionModel.valueOf(prefs.getString("detectionModel", "") ?: "") }.getOrDefault(DetectionModel.BALANCED)
         viewModelScope.launch(Dispatchers.Default) {
             try {
-                engine.init()
+                engine.init(model)
                 modelReady = true
             } catch (t: Throwable) {
                 message = "Could not load the detection model: ${t.message}"

@@ -23,6 +23,20 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.10.2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Cache exported TFLite models
+        id: models
+        uses: actions/cache@v4
+        with:
+          path: |
+            android/app/src/main/assets/yolo11n.tflite
+            android/app/src/main/assets/yolo11s.tflite
+          key: yolo11-tflite-v1-${{ hashFiles('android/scripts/export-models.sh') }}
+      - name: Export YOLO11 n/s to TFLite
+        if: steps.models.outputs.cache-hit != 'true'
+        run: bash scripts/export-models.sh
       - name: Unit tests and APK
         run: gradle --no-daemon testDebugUnitTest assembleDebug assembleDebugAndroidTest
       - uses: actions/upload-artifact@v4
@@ -79,7 +93,7 @@ jobs:
       - uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
-          # MediaPipe's AAR ships arm64-v8a, armeabi-v7a and x86 only (no x86_64), so use a 32-bit x86 image.
+          # TensorFlow Lite ships x86 and x86_64 libraries; the 32-bit image is the one this job was validated with.
           arch: x86
           target: google_apis
           disable-animations: true

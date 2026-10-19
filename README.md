@@ -7,7 +7,9 @@ leaves. Each box can count all directions or only one of 8. Results show unique 
 wrong detections; CSV export adds a 15-minute volume table. No video is stored or uploaded.
 
 - **Sources:** live camera (CameraX), video file, RTSP stream (Media3).
-- **Detection:** EfficientDet-Lite0 (COCO) through MediaPipe Tasks; car, truck, bus, motorcycle, bicycle, person.
+- **Detection:** Ultralytics YOLO11 s / n (Balanced / Fastest) exported to TensorFlow Lite by
+  `android/scripts/export-models.sh` (CI caches them; not committed), run with TFLite + own decoding and NMS.
+  YOLO weights are AGPL-3.0: fine for personal / open-source use, check the licence before commercial distribution.
 - **Tracking / counting / speed:** pure Kotlin in `android/app/src/main/java/com/freecount/traffic/core` (unit-tested on the JVM).
 - **Speed:** set the real length (m) of a zone's long side; speed = length x fraction travelled / time inside.
   Video frames are read at exact timestamps (10 fps), so speed does not depend on device performance.

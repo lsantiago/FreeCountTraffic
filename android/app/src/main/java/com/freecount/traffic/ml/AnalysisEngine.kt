@@ -51,9 +51,13 @@ class AnalysisEngine(private val context: Context) {
     private val _state = MutableStateFlow(EngineState())
     val state: StateFlow<EngineState> = _state
 
-    /** Loads the model. Call off the main thread. */
-    fun init() = synchronized(lock) {
-        if (detector == null) detector = VehicleDetector(context)
+    /** Loads (or swaps) the detection model. Call off the main thread. */
+    fun init(model: DetectionModel = DetectionModel.BALANCED) {
+        val fresh = VehicleDetector(context, model) // heavy: build outside the lock
+        synchronized(lock) {
+            detector?.close()
+            detector = fresh
+        }
     }
 
     val isReady: Boolean get() = detector != null
