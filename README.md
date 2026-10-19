@@ -30,3 +30,10 @@ The detection model is downloaded by Gradle on the first build (`downloadModel` 
 - Speed accuracy depends on how well the zone length matches the real distance and on the camera angle
   (best: camera looking along or across the road, zone drawn on the road plane).
 - The emulator tests do not use real traffic footage, so counting accuracy is validated only by the JVM unit tests.
+
+## Repository layout
+
+- `android/` Kotlin + Jetpack Compose app (see above). CI: `.github/workflows/android.yml`.
+- `ios/` Swift + SwiftUI app, buildable with GitHub Actions (macOS runner) or xtool. See `ios/README.md`.
+  CI: `.github/workflows/ios.yml`.
+- `ci/testdata/` sample traffic video shared by both platforms' headless counting runs.

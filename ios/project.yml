@@ -1,0 +1,41 @@
+# XcodeGen spec used by CI (macOS runner): `xcodegen generate` -> FreeCountTraffic.xcodeproj
+name: FreeCountTraffic
+options:
+  bundleIdPrefix: com.freecount
+  deploymentTarget:
+    iOS: "16.0"
+packages:
+  TrafficCorePackage:
+    path: .
+targets:
+  FreeCountTraffic:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/FreeCountTraffic
+    dependencies:
+      - package: TrafficCorePackage
+        product: TrafficCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.freecount.traffic
+        INFOPLIST_FILE: Info.plist
+        GENERATE_INFOPLIST_FILE: YES
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+    scheme:
+      testTargets:
+        - TrafficCoreTests
+  TrafficCoreTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests/TrafficCoreTests
+    dependencies:
+      - package: TrafficCorePackage
+        product: TrafficCore
+    settings:
+      base:
+        SWIFT_VERSION: "5.0"

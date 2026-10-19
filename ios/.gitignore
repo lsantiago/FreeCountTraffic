@@ -1,0 +1,7 @@
+*.mlmodel
+*.mlmodelc
+.build/
+*.xcodeproj/
+xtool/
+DerivedData/
+.swiftpm/

@@ -1,0 +1,76 @@
+name: iOS CI
+
+on:
+  push:
+    paths: ["ios/**", "ci/**", ".github/workflows/ios.yml"]
+  pull_request:
+    paths: ["ios/**", "ci/**", ".github/workflows/ios.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Tests, simulator run, unsigned IPA
+    runs-on: macos-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: ios
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch Core ML model
+        run: ./scripts/fetch-model.sh
+
+      - name: Install XcodeGen and generate the Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Pick an iPhone simulator
+        run: |
+          UDID=$(xcrun simctl list devices available | grep -E "iPhone" | head -1 | sed -E 's/.*\(([0-9A-F-]{36})\).*/\1/')
+          echo "Using simulator $UDID"
+          xcrun simctl list devices available | grep "$UDID"
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+
+      - name: Unit tests (TrafficCore, iOS simulator)
+        run: |
+          set -o pipefail
+          xcodebuild test -project FreeCountTraffic.xcodeproj -scheme FreeCountTraffic \
+            -destination "id=$UDID" -derivedDataPath build-test \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee test.log | tail -60
+
+      - name: Build for simulator (Release)
+        run: |
+          set -o pipefail
+          xcodebuild build -project FreeCountTraffic.xcodeproj -scheme FreeCountTraffic -configuration Release \
+            -destination "id=$UDID" -derivedDataPath build-sim CODE_SIGNING_ALLOWED=NO 2>&1 | tee build-sim.log | tail -30
+
+      - name: Build unsigned device IPA (Release)
+        run: |
+          set -o pipefail
+          xcodebuild build -project FreeCountTraffic.xcodeproj -scheme FreeCountTraffic -configuration Release \
+            -sdk iphoneos -destination "generic/platform=iOS" -derivedDataPath build-dev \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" 2>&1 | tee build-dev.log | tail -30
+          mkdir -p ipa/Payload
+          cp -R build-dev/Build/Products/Release-iphoneos/FreeCountTraffic.app ipa/Payload/
+          (cd ipa && zip -qry ../FreeCountTraffic-unsigned.ipa Payload)
+          ls -la FreeCountTraffic-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FreeCountTraffic-unsigned-ipa
+          path: ios/FreeCountTraffic-unsigned.ipa
+
+      - name: Simulator smoke run + headless counting pass over the test video
+        run: bash ci/simulator-tests.sh "$UDID" build-sim/Build/Products/Release-iphonesimulator/FreeCountTraffic.app
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-simulator-screenshots-and-logs
+          path: |
+            ios/screenshots/
+            ios/test.log
+            ios/build-sim.log
+            ios/build-dev.log
