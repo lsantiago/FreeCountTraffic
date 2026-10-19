@@ -86,3 +86,4 @@ jobs:
           path: |
             screenshots/
             instrument.log
+            logcat_autotest.txt

@@ -186,6 +186,48 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ---- headless test run (used by CI: adb am start --es autotest_video ... --es autotest_zones ...) ----
+    var autotestStarted = false
+
+    /**
+     * Runs one video through the pipeline and writes `autotest_result.csv`, `autotest_summary.txt` and
+     * `autotest_done` into the app's private files dir. [fileName] is resolved inside that dir only.
+     */
+    fun runAutotest(fileName: String, testZones: List<Zone>) {
+        if (autotestStarted) return
+        autotestStarted = true
+        val dir = getApplication<Application>().filesDir
+        val file = java.io.File(dir, fileName)
+        if (fileName.contains('/') || fileName.contains('\\') || !file.exists()) {
+            android.util.Log.e("AutoTest", "video not found: $fileName")
+            java.io.File(dir, "autotest_done").writeText("missing video")
+            return
+        }
+        if (testZones.isNotEmpty()) {
+            updateZones { testZones }
+            selectedZoneId = testZones.first().id
+            nextZoneId = maxOf(nextZoneId, testZones.maxOf { it.id } + 1)
+        }
+        viewModelScope.launch {
+            while (!modelReady) kotlinx.coroutines.delay(200)
+            selectSource(SourceType.VIDEO)
+            loadVideo(Uri.fromFile(file))
+            kotlinx.coroutines.delay(1000)
+            start()
+            while (running) kotlinx.coroutines.delay(500)
+            val events = engine.state.value.events
+            withContext(Dispatchers.IO) {
+                java.io.File(dir, "autotest_result.csv").writeText(com.freecount.traffic.core.CsvExporter.build("autotest", events))
+                val summary = com.freecount.traffic.core.Summary.of(events, _zones.value)
+                    .joinToString("\n") { com.freecount.traffic.core.Summary.line(it) }
+                java.io.File(dir, "autotest_summary.txt").writeText("total=${events.size}\n$summary\n")
+                android.util.Log.i("AutoTest", "total=${events.size}")
+                summary.lines().forEach { android.util.Log.i("AutoTest", it) }
+                java.io.File(dir, "autotest_done").writeText("ok")
+            }
+        }
+    }
+
     // ---- history ----
     suspend fun sessionWithEvents(id: Long) = dao.session(id)?.let { it to dao.records(id).map { r -> r.toEvent() } }
     fun deleteSession(id: Long) = viewModelScope.launch(Dispatchers.IO) { dao.delete(id) }
