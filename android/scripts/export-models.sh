@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Exports Ultralytics YOLO11 n / s to TensorFlow Lite (float16, 640x640, no NMS: the app decodes and runs NMS)
+# Exports Ultralytics YOLO11 n / s to TensorFlow Lite (float32, 640x640, no NMS: the app decodes and runs NMS)
 # into app/src/main/assets. They back the "Fastest / Balanced" detection models (same family as the iOS app).
 # Needs Python 3.10-3.12 and a few GB of disk for the temporary virtualenv (PyTorch + TensorFlow).
 # CI caches the result, so this only runs when the script changes.
@@ -25,7 +25,12 @@ pip install --quiet ultralytics
 
 cd "$WORK"
 for n in n s; do
-  yolo export model="yolo11$n.pt" format=tflite imgsz=640 half=True
-  cp "yolo11${n}_saved_model/yolo11${n}_float16.tflite" "$OUT/yolo11$n.tflite"
+  # Recent Ultralytics exports TFLite through LiteRT and only supports FP32 / INT8 (no FP16).
+  yolo export model="yolo11$n.pt" format=tflite imgsz=640
+  # the output folder / file name changed across versions: take the (non-INT8) .tflite produced for this model
+  f="$(find . -name "*.tflite" -path "*yolo11${n}*" ! -iname "*int8*" ! -iname "*int16*" | head -1)"
+  if [ -z "$f" ]; then echo "no .tflite found for yolo11$n"; find . -maxdepth 3 | grep -v venv; exit 1; fi
+  echo "using $f"
+  cp "$f" "$OUT/yolo11$n.tflite"
 done
 ls -la "$OUT"
