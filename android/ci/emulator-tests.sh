@@ -5,8 +5,9 @@
 # The APK is installed with adb (not via Gradle) so the app and its private files survive until we pull them.
 set -u
 PKG=com.freecount.traffic
-# Zones as "left,top,right,bottom,lengthMeters;..." in normalized frame coordinates. Override with ZONES=...
-ZONES="${ZONES:-0.05,0.45,0.95,0.60,10}"
+# Boxes as "left,top,right,bottom,lengthMeters;..." in normalized coordinates. These two vertical boxes (one per carriageway)
+# fit vehicles_short.mp4, where traffic moves toward/away from the camera. Lengths (25 m) are placeholders. Override with ZONES=...
+ZONES="${ZONES:-0.25,0.40,0.44,0.80,25;0.52,0.40,0.72,0.80,25}"
 STATUS=0
 
 adb install -r apks/debug/app-debug.apk

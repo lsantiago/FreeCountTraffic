@@ -7,7 +7,7 @@ UDID="$1"
 APP="$2"
 BUNDLE=com.freecount.traffic
 # Boxes as "left,top,right,bottom,lengthMeters;..." in normalized coordinates. Override with ZONES=...
-ZONES="${ZONES:-0.05,0.45,0.95,0.60,10}"
+ZONES="${ZONES:-0.25,0.40,0.44,0.80,25;0.52,0.40,0.72,0.80,25}"
 STATUS=0
 
 mkdir -p screenshots
