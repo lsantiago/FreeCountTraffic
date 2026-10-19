@@ -74,7 +74,8 @@ jobs:
       - uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
-          arch: x86_64
+          # MediaPipe's AAR ships arm64-v8a, armeabi-v7a and x86 only (no x86_64), so use a 32-bit x86 image.
+          arch: x86
           target: google_apis
           disable-animations: true
           script: bash ci/emulator-tests.sh

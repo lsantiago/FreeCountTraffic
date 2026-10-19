@@ -20,7 +20,7 @@ class SmokeTest {
 
     private fun screenshot(name: String) {
         val inst = InstrumentationRegistry.getInstrumentation()
-        val dir = File(inst.targetContext.getExternalFilesDir(null), "screenshots").apply { mkdirs() }
+        val dir = File(inst.targetContext.filesDir, "screenshots").apply { mkdirs() }
         val bmp = inst.uiAutomation.takeScreenshot() ?: return
         FileOutputStream(File(dir, "$name.png")).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }

@@ -13,7 +13,10 @@ done
 adb shell am instrument -w "$PKG.test/androidx.test.runner.AndroidJUnitRunner" | tee instrument.log
 
 mkdir -p screenshots
-adb pull "/sdcard/Android/data/$PKG/files/screenshots/." screenshots/ || echo "no screenshots pulled"
+# The app is debuggable, so run-as can read its private files dir (the external one is not readable by adb on API 30).
+for f in $(adb shell run-as "$PKG" ls files/screenshots | tr -d '\r'); do
+  adb exec-out run-as "$PKG" cat "files/screenshots/$f" > "screenshots/$f"
+done
 
 # Plain launch screenshot, independent of the tests.
 adb shell am start -n "$PKG/.MainActivity"

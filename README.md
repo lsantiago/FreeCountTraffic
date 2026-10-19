@@ -15,7 +15,7 @@ vehicles that cross a box are counted by class and direction, and their speed is
 Push to GitHub. The workflow in `.github/workflows/android.yml`:
 
 1. runs the unit tests and builds the debug APK (artifact `FreeCountTraffic-debug-apk`);
-2. boots an Android emulator, installs the app, runs the instrumented smoke tests (model loads and runs on x86_64,
+2. boots an Android emulator, installs the app, runs the instrumented smoke tests (model loads and runs on an x86 emulator,
    screens render, RTSP URL validation) and uploads screenshots (artifact `emulator-screenshots-and-logs`).
 
 To get the APK: open the run in the repo's **Actions** tab and download `FreeCountTraffic-debug-apk`, or push a
