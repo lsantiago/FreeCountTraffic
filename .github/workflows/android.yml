@@ -26,15 +26,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Cache exported TFLite models
+      - name: Cache exported ONNX models
         id: models
         uses: actions/cache@v4
         with:
           path: |
-            android/app/src/main/assets/yolo11n.tflite
-            android/app/src/main/assets/yolo11s.tflite
-          key: yolo11-tflite-v1-${{ hashFiles('android/scripts/export-models.sh') }}
-      - name: Export YOLO11 n/s to TFLite
+            android/app/src/main/assets/yolo11n.onnx
+            android/app/src/main/assets/yolo11s.onnx
+          key: yolo11-onnx-v1-${{ hashFiles('android/scripts/export-models.sh') }}
+      - name: Export YOLO11 n/s to ONNX
         if: steps.models.outputs.cache-hit != 'true'
         run: bash scripts/export-models.sh
       - name: Unit tests and APK
@@ -93,7 +93,7 @@ jobs:
       - uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
-          # TensorFlow Lite ships x86 and x86_64 libraries; the 32-bit image is the one this job was validated with.
+          # ONNX Runtime ships x86 and x86_64 libraries; the 32-bit image is the one this job was validated with.
           arch: x86
           target: google_apis
           disable-animations: true

@@ -7,3 +7,4 @@ captures/
 *.tflite
 screenshots/
 .claude/
+*.onnx

@@ -25,7 +25,7 @@ class SmokeTest {
         FileOutputStream(File(dir, "$name.png")).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
-    /** Native TFLite libraries load and the bundled model runs on this ABI. */
+    /** Native ONNX Runtime libraries load and the bundled model runs on this ABI. */
     @Test
     fun detectorLoadsAndRuns() {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
