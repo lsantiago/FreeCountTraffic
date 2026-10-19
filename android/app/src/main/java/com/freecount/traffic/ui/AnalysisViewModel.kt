@@ -95,7 +95,7 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putBoolean("saveImages", on).apply()
     }
 
-    fun setSessionName(name: String) {
+    fun editSessionName(name: String) {
         sessionName = name
         nameEdited = true
     }

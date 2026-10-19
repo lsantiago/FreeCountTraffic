@@ -183,7 +183,7 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
 
             OutlinedTextField(
                 value = vm.sessionName,
-                onValueChange = { vm.setSessionName(it) },
+                onValueChange = { vm.editSessionName(it) },
                 label = { Text("Session name") },
                 placeholder = { Text(if (source == SourceType.VIDEO) "Video file name" else "Date and time") },
                 singleLine = true,
