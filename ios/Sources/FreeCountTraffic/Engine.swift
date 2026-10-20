@@ -94,7 +94,10 @@ final class AnalysisEngine: @unchecked Sendable {
             fpsEma = fpsEma == 0 ? inst : 0.8 * fpsEma + 0.2 * inst
         }
         lastFrameTime = now
-        return EngineSnapshot(frame: frame, tracks: result.active, events: counter.events, fps: fpsEma, trails: trailMap)
+        // only vehicles detected in this frame are drawn: a track the tracker keeps alive for a moment after the
+        // vehicle is gone (to bridge missed detections) must not leave its box behind on screen
+        let visible = result.active.filter { $0.lastSeenMs == tMs }
+        return EngineSnapshot(frame: frame, tracks: visible, events: counter.events, fps: fpsEma, trails: trailMap)
     }
 
     func reset() {

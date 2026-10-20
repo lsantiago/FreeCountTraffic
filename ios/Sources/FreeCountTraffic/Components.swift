@@ -36,8 +36,9 @@ struct ClassChips: View {
                 if let n = byClass[c] {
                     HStack(spacing: 4) {
                         ClassIcon(cls: c, size: 16)
-                        Text("\(n)").font(.subheadline)
+                        Text("\(n)").font(.subheadline.monospacedDigit()).lineLimit(1)
                     }
+                    .fixedSize()
                 }
             }
         }

@@ -175,14 +175,28 @@ struct AnalysisView: View {
         let selected = z.id == model.selectedZoneId
         var byClass: [VehicleClass: Int] = [:]
         for e in events where e.zoneId == z.id { byClass[e.cls, default: 0] += 1 }
-        return HStack(spacing: 10) {
+        let header = HStack(spacing: 10) {
             Swatch(color: Theme.zone(i))
-            Text(z.name).font(.body)
+            Text(z.name).font(.body).lineLimit(1).truncationMode(.tail)
             DirectionMenu(current: z.direction) { model.setDirection(z.id, $0) }
                 .disabled(model.running)
-            Spacer()
+        }
+        let counts = Group {
             if byClass.isEmpty { Text("0").font(.subheadline) } else { ClassChips(byClass: byClass) }
         }
+        // counts on the same line while they fit, otherwise on their own line (large counts, several classes)
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                header
+                Spacer(minLength: 8)
+                counts
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                header
+                counts.padding(.leading, 28)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
         .background(selected ? Theme.peach : Color.clear, in: RoundedRectangle(cornerRadius: 10))
         .foregroundColor(selected ? Theme.ink : .primary)

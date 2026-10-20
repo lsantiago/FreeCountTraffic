@@ -92,21 +92,21 @@ struct FrameView: View {
             ctx.fill(path, with: .color(c.opacity(selected ? 0.40 : 0.28)))
             ctx.stroke(path, with: .color(c), lineWidth: selected ? 3 : 2)
 
-            // big count badge in the middle of the box
-            let count = "\(counts[z.id] ?? 0)"
-            let bw = CGFloat(count.count) * 11 + 16
-            let badge = CGRect(x: r.midX - bw / 2, y: r.midY - 13, width: bw, height: 26)
-            ctx.fill(Path(roundedRect: badge, cornerRadius: 8), with: .color(Color(white: 0.12, opacity: 0.67)))
-            ctx.draw(Text(count).font(.system(size: 16, weight: .bold)).foregroundColor(.white),
-                     at: CGPoint(x: badge.midX, y: badge.midY))
+            // big count badge in the middle of the box (measured, so long counts never spill out of it)
+            let count = ctx.resolve(Text("\(counts[z.id] ?? 0)").font(.system(size: 16, weight: .bold).monospacedDigit()).foregroundColor(.white))
+            let cs = count.measure(in: size)
+            let badge = CGRect(x: r.midX - (cs.width + 16) / 2, y: r.midY - 13, width: cs.width + 16, height: 26)
+            ctx.fill(Path(roundedRect: badge, cornerRadius: 8), with: .color(Color(white: 0.12, opacity: 0.75)))
+            ctx.draw(count, at: CGPoint(x: badge.midX, y: badge.midY))
 
-            ctx.draw(Text(z.name).font(.system(size: 12, weight: .semibold)).foregroundColor(.white),
-                     at: CGPoint(x: r.minX + 6, y: r.minY + 9), anchor: .leading)
-            if let d = z.direction {
-                // counting direction filter
-                ctx.draw(Text(d.arrow).font(.system(size: 18, weight: .heavy)).foregroundColor(.white),
-                         at: CGPoint(x: r.maxX - 6, y: r.minY + 11), anchor: .trailing)
-            }
+            // name and direction on a dark pill so vehicle labels passing underneath never hide them
+            var title = z.name
+            if let d = z.direction { title += "  " + d.arrow }
+            let label = ctx.resolve(Text(title).font(.system(size: 12, weight: .semibold)).foregroundColor(.white))
+            let ls = label.measure(in: CGSize(width: max(r.width - 8, 20), height: 20))
+            let pill = CGRect(x: r.minX + 3, y: r.minY + 3, width: ls.width + 8, height: ls.height + 4)
+            ctx.fill(Path(roundedRect: pill, cornerRadius: 4), with: .color(Color(white: 0.12, opacity: 0.75)))
+            ctx.draw(label, in: pill.insetBy(dx: 4, dy: 2))
             if selected {
                 let h = CGPoint(x: r.maxX, y: r.maxY)
                 ctx.fill(Path(ellipseIn: CGRect(x: h.x - 9, y: h.y - 9, width: 18, height: 18)), with: .color(.white))
