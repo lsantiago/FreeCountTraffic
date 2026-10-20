@@ -23,30 +23,48 @@ enum class DetectionModel(val title: String, val asset: String) {
     FASTEST("Fastest", "yolo11n.onnx"),
 }
 
+/** Detector input side in pixels: smaller is much faster (cost grows with the square) but misses distant vehicles. */
+enum class InputSize(val px: Int, val title: String) {
+    LARGE(640, "640 (accurate)"),
+    MEDIUM(480, "480"),
+    SMALL(320, "320 (fast)"),
+}
+
 /**
  * On-device COCO object detector: an Ultralytics YOLO11 model exported to ONNX by `scripts/export-models.sh`
- * (640x640 RGB NCHW input, raw [1, 84, 8400] output) and run with ONNX Runtime. The frame is letterboxed into the
- * square input; boxes are decoded, filtered to the classes we count and de-duplicated with class-agnostic NMS
- * (so one vehicle never becomes both a car and a truck).
+ * (dynamic-size RGB NCHW input, raw [1, 84, N] output) and run with ONNX Runtime, on XNNPACK when available.
+ * The frame is letterboxed into the square input; boxes are decoded, filtered to the classes we count and
+ * de-duplicated with class-agnostic NMS (so one vehicle never becomes both a car and a truck).
  */
 class VehicleDetector(
     context: Context,
-    model: DetectionModel = DetectionModel.BALANCED,
+    model: DetectionModel = DetectionModel.FASTEST,
+    inputSize: InputSize = InputSize.MEDIUM,
     private val scoreThreshold: Float = 0.10f,
 ) : AutoCloseable {
 
     private val env = OrtEnvironment.getEnvironment()
     private val session: OrtSession
     private val inputName: String
-    private val size = 640
+    private val size = inputSize.px
     private val input = FloatBuffer.allocate(3 * size * size)
     private val pixels = IntArray(size * size)
     private val letterbox = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
 
     init {
         val bytes = context.assets.open(model.asset).use { it.readBytes() }
-        val options = OrtSession.SessionOptions().apply { setIntraOpNumThreads(4) }
-        session = env.createSession(bytes, options)
+        val threads = Runtime.getRuntime().availableProcessors().coerceIn(1, 4)
+        session = try {
+            // XNNPACK: optimized CPU kernels, recommended by ONNX Runtime for non-quantized models on mobile.
+            // It manages its own thread pool, so ONNX Runtime's intra-op pool is kept to one thread.
+            val xnn = OrtSession.SessionOptions().apply {
+                addXnnpack(mapOf("intra_op_num_threads" to threads.toString()))
+                setIntraOpNumThreads(1)
+            }
+            env.createSession(bytes, xnn)
+        } catch (_: Throwable) {
+            env.createSession(bytes, OrtSession.SessionOptions().apply { setIntraOpNumThreads(threads) })
+        }
         inputName = session.inputNames.first()
     }
 

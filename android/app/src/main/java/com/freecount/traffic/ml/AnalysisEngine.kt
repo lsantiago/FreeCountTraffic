@@ -12,6 +12,8 @@ import com.freecount.traffic.core.ZoneCounter
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -52,8 +54,8 @@ class AnalysisEngine(private val context: Context) {
     val state: StateFlow<EngineState> = _state
 
     /** Loads (or swaps) the detection model. Call off the main thread. */
-    fun init(model: DetectionModel = DetectionModel.BALANCED) {
-        val fresh = VehicleDetector(context, model) // heavy: build outside the lock
+    fun init(model: DetectionModel = DetectionModel.FASTEST, inputSize: InputSize = InputSize.MEDIUM) {
+        val fresh = VehicleDetector(context, model, inputSize) // heavy: build outside the lock
         synchronized(lock) {
             detector?.close()
             detector = fresh
@@ -67,11 +69,35 @@ class AnalysisEngine(private val context: Context) {
         _state.value = _state.value.copy(frame = frame, tracks = emptyList())
     }
 
+    private val liveWorker = Executors.newSingleThreadExecutor()
+    private val liveBusy = AtomicBoolean(false)
+
+    /**
+     * Live sources (camera, RTSP): every frame is displayed at once (keeping the last boxes on top) and the detector
+     * works on the latest frame in the background, so the picture stays fluid even when detection is slow.
+     */
+    fun submitLive(frame: Bitmap, rawMs: Long, counting: Boolean) {
+        if (!counting || detector == null) {
+            showFrame(frame)
+            return
+        }
+        _state.value = _state.value.copy(frame = frame)
+        if (!liveBusy.compareAndSet(false, true)) return // detector busy: this frame is only shown
+        liveWorker.execute {
+            try {
+                process(frame, rawMs, true, display = false)
+            } finally {
+                liveBusy.set(false)
+            }
+        }
+    }
+
     /**
      * @param rawMs timestamp of the frame in ms on a monotonic clock (video position or camera timestamp).
      * @param counting when false the frame is only displayed.
+     * @param display false when the display is fed separately ([submitLive]).
      */
-    fun process(frame: Bitmap, rawMs: Long, counting: Boolean) {
+    fun process(frame: Bitmap, rawMs: Long, counting: Boolean, display: Boolean = true) {
         val det = detector
         if (!counting || det == null) {
             showFrame(frame)
@@ -103,7 +129,7 @@ class AnalysisEngine(private val context: Context) {
             }
             lastFrameNs = now
 
-            _state.value = EngineState(frame, tr.active, counter.events, fpsEma)
+            _state.value = EngineState(if (display) frame else _state.value.frame, tr.active, counter.events, fpsEma)
         }
     }
 
@@ -127,6 +153,7 @@ class AnalysisEngine(private val context: Context) {
     }
 
     fun close() = synchronized(lock) {
+        liveWorker.shutdown()
         detector?.close()
         detector = null
     }

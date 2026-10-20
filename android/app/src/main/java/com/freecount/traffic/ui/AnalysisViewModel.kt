@@ -18,6 +18,7 @@ import com.freecount.traffic.data.ThumbStore
 import com.freecount.traffic.data.ZoneJson
 import com.freecount.traffic.ml.AnalysisEngine
 import com.freecount.traffic.ml.DetectionModel
+import com.freecount.traffic.ml.InputSize
 import com.freecount.traffic.source.SourceType
 import com.freecount.traffic.source.VideoSource
 import com.google.android.gms.location.LocationServices
@@ -110,7 +111,7 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Settings: Balanced (YOLO11s) or Fastest (YOLO11n). */
     var detectionModel by mutableStateOf(
-        runCatching { DetectionModel.valueOf(prefs.getString("detectionModel", "") ?: "") }.getOrDefault(DetectionModel.BALANCED),
+        runCatching { DetectionModel.valueOf(prefs.getString("detectionModel", "") ?: "") }.getOrDefault(DetectionModel.FASTEST),
     )
         private set
 
@@ -121,12 +122,26 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
         loadDetector()
     }
 
+    /** Settings: detector input size (smaller = faster, misses distant vehicles). */
+    var inputSize by mutableStateOf(
+        runCatching { InputSize.valueOf(prefs.getString("inputSize", "") ?: "") }.getOrDefault(InputSize.MEDIUM),
+    )
+        private set
+
+    fun chooseInputSize(size: InputSize) {
+        if (running || size == inputSize) return
+        inputSize = size
+        prefs.edit().putString("inputSize", size.name).apply()
+        loadDetector()
+    }
+
     private fun loadDetector() {
         modelReady = false
-        val model = runCatching { DetectionModel.valueOf(prefs.getString("detectionModel", "") ?: "") }.getOrDefault(DetectionModel.BALANCED)
+        val model = runCatching { DetectionModel.valueOf(prefs.getString("detectionModel", "") ?: "") }.getOrDefault(DetectionModel.FASTEST)
+        val size = runCatching { InputSize.valueOf(prefs.getString("inputSize", "") ?: "") }.getOrDefault(InputSize.MEDIUM)
         viewModelScope.launch(Dispatchers.Default) {
             try {
-                engine.init(model)
+                engine.init(model, size)
                 modelReady = true
             } catch (t: Throwable) {
                 message = "Could not load the detection model: ${t.message}"
@@ -313,7 +328,10 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
                     .joinToString("\n") { com.freecount.traffic.core.Summary.line(it) }
                 val unique = com.freecount.traffic.core.Summary.unique(events).size
                 val images = events.count { ThumbStore.file(getApplication(), lastSessionId ?: 0, it.trackId) != null }
-                java.io.File(dir, "autotest_summary.txt").writeText("total=${events.size}\nunique=$unique\nimages=$images\n$summary\n")
+                java.io.File(dir, "autotest_summary.txt").writeText(
+                    "total=${events.size}\nunique=$unique\nimages=$images\n" +
+                        "fps=${String.format(Locale.US, "%.2f", engine.state.value.fps)}\n$summary\n",
+                )
                 android.util.Log.i("AutoTest", "total=${events.size} unique=$unique images=$images")
                 summary.lines().forEach { android.util.Log.i("AutoTest", it) }
                 java.io.File(dir, "autotest_done").writeText("ok")

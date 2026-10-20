@@ -25,7 +25,8 @@ pip install --quiet ultralytics onnx onnxslim
 
 cd "$WORK"
 for n in n s; do
-  yolo export model="yolo11$n.pt" format=onnx imgsz=640 simplify=True opset=17
+  # dynamic: the app picks the input size (640 / 480 / 320) at run time
+  yolo export model="yolo11$n.pt" format=onnx imgsz=640 dynamic=True simplify=True opset=17
   cp "yolo11$n.onnx" "$OUT/yolo11$n.onnx"
 done
 ls -la "$OUT"

@@ -287,6 +287,17 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
                     )
                 }
             }
+            Text("Detector image size (smaller is faster, misses distant vehicles)", style = MaterialTheme.typography.bodyMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                com.freecount.traffic.ml.InputSize.entries.forEach { s ->
+                    FilterChip(
+                        selected = vm.inputSize == s,
+                        onClick = { vm.chooseInputSize(s) },
+                        enabled = !vm.running,
+                        label = { Text(s.title) },
+                    )
+                }
+            }
             Text("Confidence threshold: ${(vm.confidence * 100).roundToInt()} %", style = MaterialTheme.typography.bodyMedium)
             Slider(
                 value = vm.confidence,
@@ -358,7 +369,7 @@ private fun RtspLoop(vm: AnalysisViewModel, texture: TextureView?, url: String) 
             val bmp = tv.getBitmap(FRAME_WIDTH, h) ?: continue
             val counting = vm.running
             val t = SystemClock.elapsedRealtime()
-            withContext(Dispatchers.Default) { vm.engine.process(bmp, t, counting) }
+            withContext(Dispatchers.Default) { vm.engine.submitLive(bmp, t, counting) }
         }
     }
 }
