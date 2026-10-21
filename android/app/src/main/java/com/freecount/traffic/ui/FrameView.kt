@@ -16,8 +16,12 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -30,6 +34,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -93,12 +98,45 @@ private sealed interface Mode {
 /** What a touch grabbed. [zoneId] null = the study area. */
 private class Grab(val mode: Mode, val zoneId: Int?, val start: ViewBox, val startPan: Offset)
 
-private val ZOOM_STEPS = listOf(1f, 1.5f, 2f, 3f)
+private val ZOOM_STEPS = listOf(1f, 1.5f, 2f, 3f, 4f)
+
+/** Keeps the zoomed picture covering the view (or centred along an axis where it is smaller than the view). */
+private fun clampOrigin(o: Offset, d: Size, v: Size) = Offset(
+    if (d.width <= v.width) (v.width - d.width) / 2f else o.x.coerceIn(v.width - d.width, 0f),
+    if (d.height <= v.height) (v.height - d.height) / 2f else o.y.coerceIn(v.height - d.height, 0f),
+)
+
+/** The picture at 100%: as large as fits in the view. */
+private fun baseSize(v: Size, aspect: Float): Size {
+    val w = minOf(v.width, v.height * aspect)
+    return Size(w, w / aspect)
+}
+
+/**
+ * Where the picture is drawn in the view: zooming enlarges it over the whole view (like the reference app),
+ * not only inside its own letterboxed rectangle.
+ */
+private fun contentRect(v: Size, aspect: Float, zoom: Float, origin: Offset): Rect {
+    val b = baseSize(v, aspect)
+    val d = Size(b.width * zoom, b.height * zoom)
+    return Rect(clampOrigin(origin, d, v), d)
+}
+
+/** Zoom keeping the picture point under [anchor] in place; returns the new origin. */
+private fun zoomOrigin(v: Size, aspect: Float, zoom: Float, origin: Offset, next: Float, anchor: Offset): Offset {
+    val c = contentRect(v, aspect, zoom, origin)
+    val qx = (anchor.x - c.left) / c.width
+    val qy = (anchor.y - c.top) / c.height
+    val b = baseSize(v, aspect)
+    val d = Size(b.width * next, b.height * next)
+    return clampOrigin(Offset(anchor.x - qx * d.width, anchor.y - qy * d.height), d, v)
+}
 
 /**
  * Frame + live boxes + editable counting boxes, with zoom/pan and an optional study area.
  * Zone coordinates are normalized to the frame; everything is drawn and edited in view pixels.
- * The picture always fits inside the space given by [modifier] (vertical videos included).
+ * At 100% the picture fits inside the space given by [modifier] (vertical videos included); zooming enlarges it over
+ * the whole space. Double tap: 200% around the tapped point, again: back to 100%.
  */
 @Composable
 fun FrameView(
@@ -134,16 +172,17 @@ fun FrameView(
     val minSide = 18f * density
     val rotateGap = 28f * density
 
-    BoxWithConstraints(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
-        Box(Modifier.aspectRatio(aspect).clipToBounds().onSizeChanged { viewSize = it }) {
+    var zoomMenu by remember { mutableStateOf(false) }
+    val viewF = Size(viewSize.width.toFloat(), viewSize.height.toFloat())
+    val content = if (viewSize == IntSize.Zero) Rect.Zero else contentRect(viewF, aspect, zoom, pan)
+    val dens = LocalDensity.current
+
+    Box(modifier.background(Color.Black).clipToBounds().onSizeChanged { viewSize = it }) {
+        run {
             Box(
-                Modifier.fillMaxSize().graphicsLayer {
-                    transformOrigin = TransformOrigin(0f, 0f)
-                    scaleX = zoom
-                    scaleY = zoom
-                    translationX = pan.x
-                    translationY = pan.y
-                },
+                Modifier
+                    .offset { IntOffset(content.left.roundToInt(), content.top.roundToInt()) }
+                    .size(with(dens) { content.width.toDp() }, with(dens) { content.height.toDp() }),
             ) {
                 background()
                 if (image != null) {
@@ -154,27 +193,26 @@ fun FrameView(
             Canvas(
                 Modifier
                     .fillMaxSize()
-                    .pointerInput(viewSize) {
-                        val w = size.width.toFloat()
-                        val h = size.height.toFloat()
+                    .pointerInput(viewSize, aspect) {
+                        val v = Size(size.width.toFloat(), size.height.toFloat())
+                        fun cr() = contentRect(v, aspect, zoom, pan)
 
-                        fun clampPan(p: Offset) = Offset(p.x.coerceIn(w - w * zoom, 0f), p.y.coerceIn(h - h * zoom, 0f))
+                        fun clampPan(p: Offset) = clampOrigin(p, cr().size, v)
                         fun setZoom(z: Float, anchor: Offset) {
                             val next = z.coerceIn(1f, 4f)
-                            val q = (anchor - pan) / zoom
+                            pan = zoomOrigin(v, aspect, zoom, pan, next, anchor)
                             zoom = next
-                            pan = clampPan(anchor - q * next)
                         }
                         fun box(r: RectN, angle: Float): ViewBox {
-                            val sx = w * zoom
-                            val sy = h * zoom
-                            return ViewBox(Offset(r.cx * sx + pan.x, r.cy * sy + pan.y), r.width * sx / 2f, r.height * sy / 2f, angle)
+                            val c = cr()
+                            return ViewBox(Offset(r.cx * c.width + c.left, r.cy * c.height + c.top), r.width * c.width / 2f, r.height * c.height / 2f, angle)
                         }
                         fun rectN(b: ViewBox): RectN {
-                            val sx = w * zoom
-                            val sy = h * zoom
-                            val cx = (b.c.x - pan.x) / sx
-                            val cy = (b.c.y - pan.y) / sy
+                            val c = cr()
+                            val sx = c.width
+                            val sy = c.height
+                            val cx = (b.c.x - c.left) / sx
+                            val cy = (b.c.y - c.top) / sy
                             val hw = b.hw / sx
                             val hh = b.hh / sy
                             return RectN(cx - hw, cy - hh, cx + hw, cy + hh)
@@ -183,6 +221,7 @@ fun FrameView(
 
                         // handles of the selected box first, then any box (selected first), otherwise the picture (pan)
                         fun grab(p: Offset): Grab? {
+                            val pan = cr().topLeft
                             val panGrab = if (zoom > 1f) Grab(Mode.Pan, null, ViewBox(Offset.Zero, 0f, 0f, 0f), pan) else null
                             if (editingArea) {
                                 val area = areaNow ?: return null
@@ -214,7 +253,8 @@ fun FrameView(
                                 Mode.Move -> {
                                     val c = s.c + (p - start)
                                     // keep the centre on the picture
-                                    s.copy(c = Offset(c.x.coerceIn(pan.x, pan.x + w * zoom), c.y.coerceIn(pan.y, pan.y + h * zoom)))
+                                    val r = cr()
+                                    s.copy(c = Offset(c.x.coerceIn(r.left, r.right), c.y.coerceIn(r.top, r.bottom)))
                                 }
                                 is Mode.Corner -> {
                                     // the opposite corner stays where it is
@@ -244,10 +284,14 @@ fun FrameView(
                             }
                         }
 
+                        var lastTapAt = 0L
+                        var lastTapPos = Offset.Zero
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             var g = grab(down.position)
                             var pinched = false
+                            var moved = false
+                            var upAt = down.uptimeMillis
                             do {
                                 val event = awaitPointerEvent()
                                 val pressed = event.changes.count { it.pressed }
@@ -257,17 +301,32 @@ fun FrameView(
                                     g = null
                                     setZoom(zoom * event.calculateZoom(), event.calculateCentroid(useCurrent = true))
                                     event.changes.forEach { it.consume() }
-                                } else if (!pinched && g != null) {
+                                } else {
                                     val ch = event.changes.first()
-                                    apply(g, down.position, ch.position)
-                                    ch.consume()
+                                    upAt = ch.uptimeMillis
+                                    if ((ch.position - down.position).getDistance() > viewConfiguration.touchSlop) moved = true
+                                    if (!pinched && g != null) {
+                                        apply(g, down.position, ch.position)
+                                        ch.consume()
+                                    }
                                 }
                             } while (event.changes.any { it.pressed })
+
+                            // double tap: 200% around the tapped point, again: back to the whole picture
+                            if (!moved && !pinched && upAt - down.uptimeMillis < 250) {
+                                if (down.uptimeMillis - lastTapAt < 320 && (down.position - lastTapPos).getDistance() < handleRadius * 2) {
+                                    setZoom(if (zoom > 1.01f) 1f else 2f, down.position)
+                                    lastTapAt = 0L
+                                } else {
+                                    lastTapAt = down.uptimeMillis
+                                    lastTapPos = down.position
+                                }
+                            }
                         }
                     },
             ) {
                 drawOverlay(
-                    tracksNow, zonesNow, countsNow, selectedNow, areaNow, editingArea, zoom, pan, rotateGap,
+                    tracksNow, zonesNow, countsNow, selectedNow, areaNow, editingArea, content, rotateGap,
                 )
             }
 
@@ -278,14 +337,21 @@ fun FrameView(
                     .padding(horizontal = 10.dp, vertical = 5.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                ToolLabel("⊕ ${(zoom * 100).roundToInt()}%") {
-                    val next = ZOOM_STEPS.firstOrNull { it > zoom + 0.01f } ?: 1f
-                    // zoom around the centre of the picture
-                    val w = viewSize.width.toFloat()
-                    val h = viewSize.height.toFloat()
-                    val q = (Offset(w / 2f, h / 2f) - pan) / zoom
-                    zoom = next
-                    pan = (Offset(w / 2f, h / 2f) - q * next).let { Offset(it.x.coerceIn(w - w * next, 0f), it.y.coerceIn(h - h * next, 0f)) }
+                Box {
+                    ToolLabel("⊕ ${(zoom * 100).roundToInt()}%") { zoomMenu = true }
+                    DropdownMenu(expanded = zoomMenu, onDismissRequest = { zoomMenu = false }) {
+                        ZOOM_STEPS.forEach { z ->
+                            DropdownMenuItem(
+                                text = { Text("${(z * 100).roundToInt()}%") },
+                                onClick = {
+                                    zoomMenu = false
+                                    // zoom around the centre of the view
+                                    pan = zoomOrigin(viewF, aspect, zoom, pan, z, Offset(viewF.width / 2f, viewF.height / 2f))
+                                    zoom = z
+                                },
+                            )
+                        }
+                    }
                 }
                 ToolLabel(if (editingArea) "✓ Done" else "⛶ Study area") {
                     editingArea = !editingArea
@@ -317,13 +383,10 @@ private fun DrawScope.drawOverlay(
     selectedId: Int?,
     studyArea: RectN?,
     editingArea: Boolean,
-    zoom: Float,
-    pan: Offset,
+    content: Rect,
     rotateGap: Float,
 ) {
-    val w = size.width
-    val h = size.height
-    fun v(x: Float, y: Float) = Offset(x * w * zoom + pan.x, y * h * zoom + pan.y)
+    fun v(x: Float, y: Float) = Offset(x * content.width + content.left, y * content.height + content.top)
     fun viewRect(r: RectN) = Rect(v(r.left, r.top), v(r.right, r.bottom))
     val text = Paint().apply {
         isAntiAlias = true
