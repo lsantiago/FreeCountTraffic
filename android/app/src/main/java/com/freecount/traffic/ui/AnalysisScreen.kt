@@ -341,14 +341,16 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
         // the picture never takes the whole screen (vertical videos, phone turned sideways): the controls always keep
         // their own scrollable space next to or below it
         androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
-            if (maxWidth > maxHeight) {
+            val w = maxWidth
+            val h = maxHeight
+            if (w > h) {
                 Row(Modifier.fillMaxSize()) {
-                    frameView(Modifier.fillMaxHeight().width(maxWidth * 0.6f))
+                    frameView(Modifier.fillMaxHeight().width(w * 0.6f))
                     controls(Modifier.weight(1f).fillMaxHeight())
                 }
             } else {
                 Column(Modifier.fillMaxSize()) {
-                    frameView(Modifier.fillMaxWidth().height(minOf(maxHeight * 0.48f, maxWidth / aspect)))
+                    frameView(Modifier.fillMaxWidth().height(minOf(h * 0.48f, w / aspect)))
                     controls(Modifier.weight(1f).fillMaxWidth())
                 }
             }
