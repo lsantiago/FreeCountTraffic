@@ -161,6 +161,22 @@ class ZoneCounterTest {
         val produced = run(ZoneCounter(), vertical, listOf(0.05f to 0L, 0.4f to 1000L, 0.8f to 2000L, 0.95f to 2200L), vertical = true)
         assertEquals("↓", produced.single().direction)
     }
+
+    @Test
+    fun rotatedZone() {
+        // the horizontal lane box turned 90°: on screen it now runs top to bottom, ~0.11 of the width wide
+        val turned = Zone(3, "Turned", zone.rect, 30f, angle = (Math.PI / 2).toFloat())
+        assertTrue(turned.contains(0.5f, 0.95f, aspect))
+        assertFalse(turned.contains(0.7f, 0.5f, aspect))
+        assertTrue(zone.contains(0.7f, 0.5f, aspect))
+
+        val counter = ZoneCounter()
+        val produced = run(counter, turned, listOf(0.1f to 0L, 0.3f to 1000L, 0.5f to 2000L, 0.7f to 3000L, 0.9f to 4000L), vertical = true)
+        assertEquals(1, produced.size)
+        counter.finish(listOf(turned), aspect)
+        // travelled 0.8 of the frame height = 0.75 of the box length (0.6 * 16/9 of the height) in 4 s
+        assertEquals(30f * 0.75f / 4f * 3.6f, counter.events[0].speedKmh!!, 0.1f)
+    }
 }
 
 class SummaryAndCsvTest {

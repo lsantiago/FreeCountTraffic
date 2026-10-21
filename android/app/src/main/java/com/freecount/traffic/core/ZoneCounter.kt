@@ -64,8 +64,10 @@ class ZoneCounter(
             for (z in zones) {
                 val key = z.id to t.id
                 val horizontal = isHorizontal(z, frameAspect)
-                if (z.rect.contains(t.box.cx, t.box.cy)) {
-                    val pos = if (horizontal) t.box.cx else t.box.cy
+                if (z.contains(t.box.cx, t.box.cy, frameAspect)) {
+                    // position along the long axis as a fraction of the box length (boxes may be rotated)
+                    val (u, v) = z.local(t.box.cx, t.box.cy, frameAspect)
+                    val pos = if (horizontal) u else v
                     val st = states[key]
                     if (st == null) states[key] = InZone(pos, tMs, pos, tMs) else {
                         st.lastPos = pos
@@ -76,7 +78,7 @@ class ZoneCounter(
                         if (want != null && !want.accepts(dx, dy)) {
                             decided[key] = null
                         } else {
-                            val along = if (horizontal) dx else dy
+                            val along = if (horizontal) dx * z.axisCos + dy * z.axisSin else -dx * z.axisSin + dy * z.axisCos
                             val arrow = if (horizontal) (if (along >= 0f) "→" else "←") else (if (along >= 0f) "↓" else "↑")
                             val e = CountEvent(z.id, z.name, t.id, t.cls, arrow, null, tMs, t.score)
                             decided[key] = all.size
@@ -113,10 +115,9 @@ class ZoneCounter(
     private fun addSpeed(z: Zone, horizontal: Boolean, key: Pair<Int, Int>, st: InZone) {
         val index = decided[key] ?: return
         if (index >= all.size) return
-        val axisLen = if (horizontal) z.rect.width else z.rect.height
         val len = z.lengthMeters ?: return
-        if (axisLen <= 0f || len <= 0f) return
-        val progress = abs(st.lastPos - st.entryPos) / axisLen
+        if (len <= 0f) return
+        val progress = abs(st.lastPos - st.entryPos)
         val dtSec = (st.lastMs - st.entryMs) / 1000f
         if (progress >= minProgress && dtSec > 0.2f) {
             all[index] = all[index].copy(speedKmh = len * progress / dtSec * 3.6f)

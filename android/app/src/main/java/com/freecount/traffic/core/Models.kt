@@ -2,8 +2,10 @@ package com.freecount.traffic.core
 
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 
 enum class VehicleClass(val label: String) {
     CAR("Car"),
@@ -80,10 +82,35 @@ enum class Heading(val arrow: String, val degrees: Float) {
 data class Zone(
     val id: Int,
     val name: String,
+    /** The box before rotation (normalized frame coordinates). */
     val rect: RectN,
     val lengthMeters: Float? = null,
     val direction: Heading? = null,
-)
+    /**
+     * Clockwise rotation of the box around its centre, in radians. The rotation is applied in pixel space, so the box
+     * keeps its shape on screen whatever the frame aspect.
+     */
+    val angle: Float = 0f,
+) {
+    /** Unit vector of the box's width axis in pixel-proportional space (x scaled by the frame aspect). */
+    val axisCos: Float get() = cos(angle)
+    val axisSin: Float get() = sin(angle)
+
+    /** A point in the box's own frame: u along its width, v along its height, both within -0.5..0.5 inside the box. */
+    fun local(x: Float, y: Float, frameAspect: Float): Pair<Float, Float> {
+        val dx = (x - rect.cx) * frameAspect
+        val dy = y - rect.cy
+        val rx = dx * axisCos + dy * axisSin
+        val ry = -dx * axisSin + dy * axisCos
+        return Pair(rx / max(rect.width * frameAspect, 1e-6f), ry / max(rect.height, 1e-6f))
+    }
+
+    fun contains(x: Float, y: Float, frameAspect: Float): Boolean {
+        if (angle == 0f) return rect.contains(x, y)
+        val (u, v) = local(x, y, frameAspect)
+        return abs(u) <= 0.5f && abs(v) <= 0.5f
+    }
+}
 
 /**
  * One counted vehicle. [direction] is an arrow: "→" "←" (horizontal zone) or "↓" "↑" (vertical zone).

@@ -49,6 +49,11 @@ class AnalysisEngine(private val context: Context) {
     )
     @Volatile var confidence: Float = 0.30f
     @Volatile var saveImages: Boolean = true
+    /**
+     * Area of study: when set, only this part of the frame is analysed (at full detector resolution, so distant
+     * vehicles are found more easily).
+     */
+    @Volatile var studyArea: RectN? = null
 
     private val _state = MutableStateFlow(EngineState())
     val state: StateFlow<EngineState> = _state
@@ -109,7 +114,7 @@ class AnalysisEngine(private val context: Context) {
             val tMs = rawMs - start
             lastMs = tMs
 
-            val detections = det.detect(frame).filter { it.cls in enabledClasses && it.score >= confidence }
+            val detections = detectIn(det, frame, studyArea).filter { it.cls in enabledClasses && it.score >= confidence }
             val tr = tracker.update(detections, tMs)
             val aspect = frame.width / frame.height.toFloat()
             val produced = counter.update(zones, aspect, tr.active, tr.removed, tMs)
@@ -129,7 +134,10 @@ class AnalysisEngine(private val context: Context) {
             }
             lastFrameNs = now
 
-            _state.value = EngineState(if (display) frame else _state.value.frame, tr.active, counter.events, fpsEma)
+            // only vehicles detected in this frame are drawn: a track the tracker keeps alive for a moment after the
+            // vehicle is gone (to bridge missed detections) must not leave its box behind on screen
+            val visible = tr.active.filter { it.lastSeenMs == tMs }
+            _state.value = EngineState(if (display) frame else _state.value.frame, visible, counter.events, fpsEma)
         }
     }
 
@@ -161,6 +169,26 @@ class AnalysisEngine(private val context: Context) {
     companion object {
         /** Like the reference app, only the first 500 vehicle images of a session are kept. */
         const val MAX_THUMBNAILS = 500
+
+        /** Runs the detector on the study area only and maps the boxes back to the whole frame. */
+        private fun detectIn(det: VehicleDetector, frame: Bitmap, area: RectN?): List<com.freecount.traffic.core.Detection> {
+            if (area == null || (area.width >= 0.98f && area.height >= 0.98f)) return det.detect(frame)
+            val w = frame.width
+            val h = frame.height
+            val l = (area.left * w).roundToInt().coerceIn(0, w - 1)
+            val t = (area.top * h).roundToInt().coerceIn(0, h - 1)
+            val r = (area.right * w).roundToInt().coerceIn(l + 1, w)
+            val b = (area.bottom * h).roundToInt().coerceIn(t + 1, h)
+            if (r - l < 32 || b - t < 32) return det.detect(frame)
+            val crop = Bitmap.createBitmap(frame, l, t, r - l, b - t)
+            val fl = l / w.toFloat()
+            val ft = t / h.toFloat()
+            val sw = (r - l) / w.toFloat()
+            val sh = (b - t) / h.toFloat()
+            return det.detect(crop).map { d ->
+                d.copy(box = RectN(fl + d.box.left * sw, ft + d.box.top * sh, fl + d.box.right * sw, ft + d.box.bottom * sh))
+            }
+        }
 
         /** Crop around the vehicle (with some margin), at most 200 px, as JPEG. */
         private fun thumbnail(frame: Bitmap, box: RectN): ByteArray? = runCatching {

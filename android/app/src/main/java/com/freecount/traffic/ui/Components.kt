@@ -61,7 +61,7 @@ fun ClassChips(byClass: Map<VehicleClass, Int>) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Swatch(Palette.cls(c), size = 10)
                 Spacer(Modifier.width(4.dp))
-                Text(n.toString(), style = MaterialTheme.typography.bodyMedium)
+                Text(n.toString(), style = MaterialTheme.typography.bodyMedium, maxLines = 1, softWrap = false)
             }
         }
     }

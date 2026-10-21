@@ -28,7 +28,8 @@ object ZoneJson {
                     .put("l", z.rect.left.toDouble()).put("t", z.rect.top.toDouble())
                     .put("r", z.rect.right.toDouble()).put("b", z.rect.bottom.toDouble())
                     .put("len", z.lengthMeters?.toDouble() ?: JSONObject.NULL)
-                    .put("dir", z.direction?.name ?: JSONObject.NULL),
+                    .put("dir", z.direction?.name ?: JSONObject.NULL)
+                    .put("angle", z.angle.toDouble()),
             )
         }
     }.toString()
@@ -42,6 +43,7 @@ object ZoneJson {
                 RectN(o.getDouble("l").toFloat(), o.getDouble("t").toFloat(), o.getDouble("r").toFloat(), o.getDouble("b").toFloat()),
                 if (o.isNull("len")) null else o.getDouble("len").toFloat(),
                 if (!o.has("dir") || o.isNull("dir")) null else runCatching { Heading.valueOf(o.getString("dir")) }.getOrNull(),
+                o.optDouble("angle", 0.0).toFloat(),
             )
         }
     }.getOrDefault(emptyList())

@@ -15,12 +15,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -111,7 +113,9 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
 
     val countsByZone = remember(state.events) { state.events.groupingBy { it.zoneId }.eachCount() }
 
-    Column(Modifier.fillMaxSize().systemBarsPadding().verticalScroll(rememberScrollState()).padding(bottom = 28.dp)) {
+    val aspect = state.frame?.let { it.width / it.height.toFloat() } ?: (16f / 9f)
+
+    Column(Modifier.fillMaxSize().systemBarsPadding()) {
         // --- top bar: ‹ Back | title ---
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = { if (vm.running) vm.stop(); onBack() }) { Text("‹ Back", style = MaterialTheme.typography.titleSmall) }
@@ -134,22 +138,31 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
         if (source == SourceType.CAMERA) CameraBinding(vm)
         if (source == SourceType.RTSP) rtspActive?.let { RtspLoop(vm, rtspTexture, it) }
 
+        val frameView: @Composable (Modifier) -> Unit = { m ->
         FrameView(
             frame = state.frame,
             tracks = state.tracks,
             zones = zones,
             selectedId = vm.selectedZoneId,
             onSelect = { vm.selectedZoneId = it },
-            onRectChange = vm::setRect,
+            onZoneChange = { id, r, a -> vm.setRect(id, r, a) },
+            modifier = m,
             counts = countsByZone,
+            studyArea = vm.studyArea,
+            onStudyAreaChange = { vm.changeStudyArea(it) },
             background = {
                 if (source == SourceType.RTSP && rtspActive != null) {
                     RtspPlayerView(rtspActive!!, onTexture = { rtspTexture = it }, onError = { vm.message = it })
                 }
             },
         )
+        }
 
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        val controls: @Composable (Modifier) -> Unit = { m ->
+        Column(
+            m.verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp).padding(bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             if (!vm.modelReady) Text("Loading detection model…", style = MaterialTheme.typography.bodySmall)
             vm.message?.let { Text(it, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium) }
 
@@ -218,25 +231,36 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
             zones.forEachIndexed { i, z ->
                 val selected = z.id == vm.selectedZoneId
                 val byClass = state.events.filter { it.zoneId == z.id }.groupingBy { it.cls }.eachCount()
-                Row(
+                // counts on the same line while they fit, otherwise on their own line (large counts, several classes)
+                androidx.compose.foundation.layout.FlowRow(
                     Modifier.fillMaxWidth()
                         .background(if (selected) MaterialTheme.colorScheme.primaryContainer else androidx.compose.ui.graphics.Color.Transparent, RoundedCornerShape(10.dp))
                         .clickable { vm.selectedZoneId = z.id }
                         .padding(horizontal = 10.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    Swatch(Palette.zone(i))
-                    Spacer(Modifier.width(10.dp))
-                    Text(z.name, style = MaterialTheme.typography.bodyLarge)
-                    DirectionMenu(z.direction, enabled = !vm.running) { vm.setDirection(z.id, it) }
-                    Spacer(Modifier.weight(1f))
-                    if (byClass.isEmpty()) Text("0", style = MaterialTheme.typography.bodyMedium) else ClassChips(byClass)
+                    Row(Modifier.align(Alignment.CenterVertically), verticalAlignment = Alignment.CenterVertically) {
+                        Swatch(Palette.zone(i))
+                        Spacer(Modifier.width(10.dp))
+                        Text(
+                            z.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 180.dp),
+                        )
+                        DirectionMenu(z.direction, enabled = !vm.running) { vm.setDirection(z.id, it) }
+                    }
+                    Box(Modifier.align(Alignment.CenterVertically).padding(start = 28.dp)) {
+                        if (byClass.isEmpty()) Text("0", style = MaterialTheme.typography.bodyMedium) else ClassChips(byClass)
+                    }
                 }
             }
             OutlinedButton(onClick = { vm.addZone() }, shape = RoundedCornerShape(12.dp)) { Text("+ Add box") }
             Text(
-                "Drag a box to move it, drag its white corner dot to resize. A moving vehicle is counted when its centre " +
-                    "enters the box. Tap the arrows next to a box to count only one direction.",
+                "Drag a box to move it, any corner dot to resize it and the round arrow above it to rotate it. A moving " +
+                    "vehicle is counted when its centre enters the box. Tap the arrows next to a box to count only one " +
+                    "direction. Pinch or tap the % button to zoom (drag the picture to look around); Study area limits " +
+                    "the analysis to part of the picture, which helps with distant vehicles.",
                 style = MaterialTheme.typography.bodySmall,
             )
 
@@ -310,6 +334,23 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
             if (state.events.isNotEmpty()) {
                 Text("Results", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 8.dp))
                 ResultsPanel(state.events, zones)
+            }
+        }
+        }
+
+        // the picture never takes the whole screen (vertical videos, phone turned sideways): the controls always keep
+        // their own scrollable space next to or below it
+        androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+            if (maxWidth > maxHeight) {
+                Row(Modifier.fillMaxSize()) {
+                    frameView(Modifier.fillMaxHeight().width(maxWidth * 0.6f))
+                    controls(Modifier.weight(1f).fillMaxHeight())
+                }
+            } else {
+                Column(Modifier.fillMaxSize()) {
+                    frameView(Modifier.fillMaxWidth().height(minOf(maxHeight * 0.48f, maxWidth / aspect)))
+                    controls(Modifier.weight(1f).fillMaxWidth())
+                }
             }
         }
     }

@@ -102,7 +102,23 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
         nameEdited = true
     }
 
+    /** Part of the frame analysed (null = whole frame), stored as "l,t,r,b". */
+    var studyArea by mutableStateOf(
+        prefs.getString("studyArea", null)?.split(',')?.mapNotNull { it.toFloatOrNull() }
+            ?.takeIf { it.size == 4 }?.let { RectN(it[0], it[1], it[2], it[3]) },
+    )
+        private set
+
+    fun changeStudyArea(area: RectN?) {
+        studyArea = area
+        engine.studyArea = area
+        prefs.edit().apply {
+            if (area == null) remove("studyArea") else putString("studyArea", "${area.left},${area.top},${area.right},${area.bottom}")
+        }.apply()
+    }
+
     init {
+        engine.studyArea = studyArea
         engine.zones = _zones.value
         engine.confidence = confidence
         engine.saveImages = saveImages
@@ -172,7 +188,8 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
         selectedZoneId = _zones.value.firstOrNull()?.id
     }
 
-    fun setRect(id: Int, rect: RectN) = updateZones { list -> list.map { if (it.id == id) it.copy(rect = rect) else it } }
+    fun setRect(id: Int, rect: RectN, angle: Float = 0f) =
+        updateZones { list -> list.map { if (it.id == id) it.copy(rect = rect, angle = angle) else it } }
     fun rename(id: Int, name: String) = updateZones { list -> list.map { if (it.id == id) it.copy(name = name) else it } }
     fun setLength(id: Int, meters: Float?) = updateZones { list -> list.map { if (it.id == id) it.copy(lengthMeters = meters) else it } }
 
