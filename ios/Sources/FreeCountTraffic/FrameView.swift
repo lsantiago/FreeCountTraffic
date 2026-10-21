@@ -76,7 +76,7 @@ struct FrameView: View {
 
     private let handleRadius: CGFloat = 24
     private let minSide: CGFloat = 18
-    private static let zoomSteps: [CGFloat] = [1, 1.5, 2, 3]
+    private static let zoomSteps: [CGFloat] = [1, 1.5, 2, 3, 4]
 
     private var aspect: CGFloat {
         guard let f = frame, f.height > 0 else { return 16.0 / 9.0 }
@@ -86,13 +86,13 @@ struct FrameView: View {
     var body: some View {
         GeometryReader { geo in
             let size = geo.size
+            let c = content(size)
             ZStack(alignment: .topLeading) {
                 Color.black
                 if let frame {
                     Image(decorative: frame, scale: 1).resizable()
-                        .frame(width: size.width, height: size.height)
-                        .scaleEffect(zoom, anchor: .topLeading)
-                        .offset(pan)
+                        .frame(width: c.width, height: c.height)
+                        .offset(x: c.minX, y: c.minY)
                 }
                 // drawn in view points (outside the zoom transform) so lines and labels stay sharp
                 Canvas { ctx, s in draw(ctx, s) }
@@ -102,10 +102,13 @@ struct FrameView: View {
             .contentShape(Rectangle())
             .gesture(drag(size))
             .simultaneousGesture(pinch(size))
+            // double tap: 200% around the tapped point, again: back to the whole picture
+            .simultaneousGesture(SpatialTapGesture(count: 2).onEnded { v in
+                setZoom(zoom > 1.01 ? 1 : 2, anchor: v.location, size)
+            })
             .overlay(alignment: .topLeading) { toolbar(size) }
             .overlay(alignment: .topTrailing) { fpsBadge }
         }
-        .aspectRatio(aspect, contentMode: .fit)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(Color.black)
     }
@@ -114,9 +117,10 @@ struct FrameView: View {
 
     private func toolbar(_ size: CGSize) -> some View {
         HStack(spacing: 6) {
-            Button {
-                let next = Self.zoomSteps.first(where: { $0 > zoom + 0.01 }) ?? 1
-                setZoom(next, anchor: CGPoint(x: size.width / 2, y: size.height / 2), size)
+            Menu {
+                ForEach(Self.zoomSteps, id: \.self) { z in
+                    Button("\(Int(z * 100))%") { setZoom(z, anchor: CGPoint(x: size.width / 2, y: size.height / 2), size) }
+                }
             } label: {
                 Label("\(Int((zoom * 100).rounded()))%", systemImage: "plus.magnifyingglass")
             }
@@ -161,13 +165,36 @@ struct FrameView: View {
 
     // MARK: coordinates (normalized frame <-> view points)
 
+    /// The picture at 100%: as large as fits in the view.
+    private func baseSize(_ v: CGSize) -> CGSize {
+        let w = min(v.width, v.height * aspect)
+        return CGSize(width: w, height: w / aspect)
+    }
+
+    /// Keeps the zoomed picture covering the view (or centred along an axis where it is smaller than the view).
+    private func clampOrigin(_ o: CGSize, _ d: CGSize, _ v: CGSize) -> CGSize {
+        CGSize(width: d.width <= v.width ? (v.width - d.width) / 2 : min(0, max(v.width - d.width, o.width)),
+               height: d.height <= v.height ? (v.height - d.height) / 2 : min(0, max(v.height - d.height, o.height)))
+    }
+
+    /// Where the picture is drawn in the view: zooming enlarges it over the whole view (like the reference app),
+    /// not only inside its own letterboxed rectangle.
+    private func content(_ v: CGSize) -> CGRect {
+        let b = baseSize(v)
+        let d = CGSize(width: b.width * zoom, height: b.height * zoom)
+        let o = clampOrigin(pan, d, v)
+        return CGRect(x: o.width, y: o.height, width: d.width, height: d.height)
+    }
+
     private func toView(_ x: Float, _ y: Float, _ size: CGSize) -> CGPoint {
-        CGPoint(x: CGFloat(x) * size.width * zoom + pan.width, y: CGFloat(y) * size.height * zoom + pan.height)
+        let c = content(size)
+        return CGPoint(x: CGFloat(x) * c.width + c.minX, y: CGFloat(y) * c.height + c.minY)
     }
 
     private func rect(_ r: RectN, _ size: CGSize) -> CGRect {
-        let o = toView(r.left, r.top, size)
-        return CGRect(x: o.x, y: o.y, width: CGFloat(r.width) * size.width * zoom, height: CGFloat(r.height) * size.height * zoom)
+        let c = content(size)
+        return CGRect(x: CGFloat(r.left) * c.width + c.minX, y: CGFloat(r.top) * c.height + c.minY,
+                      width: CGFloat(r.width) * c.width, height: CGFloat(r.height) * c.height)
     }
 
     private func viewBox(_ r: RectN, angle: Float, _ size: CGSize) -> ViewBox {
@@ -176,8 +203,9 @@ struct FrameView: View {
     }
 
     private func rectN(_ b: ViewBox, _ size: CGSize) -> RectN {
-        let sx = size.width * zoom, sy = size.height * zoom
-        let cx = (b.c.x - pan.width) / sx, cy = (b.c.y - pan.height) / sy
+        let c = content(size)
+        let sx = c.width, sy = c.height
+        let cx = (b.c.x - c.minX) / sx, cy = (b.c.y - c.minY) / sy
         let w = b.hw / sx, h = b.hh / sy
         return RectN(left: Float(cx - w), top: Float(cy - h), right: Float(cx + w), bottom: Float(cy + h))
     }
@@ -272,16 +300,18 @@ struct FrameView: View {
     // MARK: zoom
 
     private func clampPan(_ p: CGSize, _ size: CGSize) -> CGSize {
-        CGSize(width: min(0, max(size.width - size.width * zoom, p.width)),
-               height: min(0, max(size.height - size.height * zoom, p.height)))
+        let b = baseSize(size)
+        return clampOrigin(p, CGSize(width: b.width * zoom, height: b.height * zoom), size)
     }
 
-    /// Zooms keeping the content under `anchor` (view point) in place.
+    /// Zooms keeping the picture point under `anchor` (view point) in place.
     private func setZoom(_ z: CGFloat, anchor: CGPoint, _ size: CGSize) {
         let next = min(max(z, 1), 4)
-        let qx = (anchor.x - pan.width) / zoom, qy = (anchor.y - pan.height) / zoom
+        let c = content(size)
+        let qx = (anchor.x - c.minX) / c.width, qy = (anchor.y - c.minY) / c.height
+        let b = baseSize(size)
         zoom = next
-        pan = clampPan(CGSize(width: anchor.x - qx * next, height: anchor.y - qy * next), size)
+        pan = clampPan(CGSize(width: anchor.x - qx * b.width * next, height: anchor.y - qy * b.height * next), size)
     }
 
     private func pinch(_ size: CGSize) -> some Gesture {
@@ -303,6 +333,8 @@ struct FrameView: View {
     /// What a touch starting at `p` grabs: handles of the selected box first, then any box (selected first),
     /// otherwise the picture itself (pan) when zoomed in.
     private func grab(_ p: CGPoint, _ size: CGSize) -> Active? {
+        let origin = content(size).origin
+        let pan = CGSize(width: origin.x, height: origin.y)
         if editingArea {
             guard let area = studyArea else { return nil }
             let b = viewBox(area, angle: 0, size)
@@ -346,9 +378,9 @@ struct FrameView: View {
                 case .move:
                     b.c = CGPoint(x: a.start.c.x + v.translation.width, y: a.start.c.y + v.translation.height)
                     // keep the centre on the picture
-                    let origin = CGPoint(x: pan.width, y: pan.height)
-                    b.c.x = min(max(b.c.x, origin.x), origin.x + size.width * zoom)
-                    b.c.y = min(max(b.c.y, origin.y), origin.y + size.height * zoom)
+                    let c = content(size)
+                    b.c.x = min(max(b.c.x, c.minX), c.maxX)
+                    b.c.y = min(max(b.c.y, c.minY), c.maxY)
                 case let .corner(sx, sy):
                     // the opposite corner stays where it is
                     let fixed = a.start.world(-sx * a.start.hw, -sy * a.start.hh)
