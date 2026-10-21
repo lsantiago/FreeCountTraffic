@@ -143,16 +143,42 @@ public enum Heading: String, CaseIterable, Codable {
 public struct Zone: Codable, Equatable, Identifiable {
     public var id: Int
     public var name: String
+    /// The box before rotation (normalized frame coordinates).
     public var rect: RectN
     public var lengthMeters: Float?
     public var direction: Heading?
+    /// Clockwise rotation of the box around its centre, in radians (nil = not rotated). The rotation is applied in
+    /// pixel space, so the box keeps its shape on screen whatever the frame aspect.
+    public var angle: Float?
 
-    public init(id: Int, name: String, rect: RectN, lengthMeters: Float? = nil, direction: Heading? = nil) {
+    public init(id: Int, name: String, rect: RectN, lengthMeters: Float? = nil, direction: Heading? = nil, angle: Float? = nil) {
         self.id = id
         self.name = name
         self.rect = rect
         self.lengthMeters = lengthMeters
         self.direction = direction
+        self.angle = angle
+    }
+
+    public var rotation: Float { angle ?? 0 }
+
+    /// Unit vector of the box's width axis in pixel-proportional space (x scaled by the frame aspect).
+    public var axis: (c: Float, s: Float) { (cosf(rotation), sinf(rotation)) }
+
+    /// A point in the box's own frame: u along its width, v along its height, both within -0.5...0.5 inside the box.
+    public func local(_ x: Float, _ y: Float, frameAspect a: Float) -> (u: Float, v: Float) {
+        let dx = (x - rect.cx) * a
+        let dy = y - rect.cy
+        let (c, s) = axis
+        let rx = dx * c + dy * s
+        let ry = -dx * s + dy * c
+        return (rx / max(rect.width * a, 1e-6), ry / max(rect.height, 1e-6))
+    }
+
+    public func contains(_ x: Float, _ y: Float, frameAspect: Float) -> Bool {
+        if rotation == 0 { return rect.contains(x, y) }
+        let p = local(x, y, frameAspect: frameAspect)
+        return abs(p.u) <= 0.5 && abs(p.v) <= 0.5
     }
 }
 

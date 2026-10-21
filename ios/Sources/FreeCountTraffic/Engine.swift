@@ -26,6 +26,9 @@ final class AnalysisEngine: @unchecked Sendable {
     private var zones: [Zone] = []
     private var enabled: Set<VehicleClass> = [.car, .truck, .bus, .motorcycle]
     private var saveImages = true
+    /// Area of study: when set, only this part of the frame is analysed (at full detector resolution, so distant
+    /// vehicles are found more easily).
+    private var studyArea: RectN?
     private var startMs: Int64?
     private var lastMs: Int64 = 0
     private var lastFrameTime: TimeInterval = 0
@@ -42,9 +45,10 @@ final class AnalysisEngine: @unchecked Sendable {
         detector = fresh
     }
 
-    func configure(zones: [Zone], enabled: Set<VehicleClass>, confidence: Float, saveImages: Bool) {
+    func configure(zones: [Zone], enabled: Set<VehicleClass>, confidence: Float, saveImages: Bool, studyArea: RectN?) {
         lock.lock(); defer { lock.unlock() }
         self.zones = zones
+        self.studyArea = studyArea
         self.enabled = enabled
         self.saveImages = saveImages
         if confidence != self.confidence {
@@ -66,7 +70,7 @@ final class AnalysisEngine: @unchecked Sendable {
         let tMs = rawMs - (startMs ?? rawMs)
         lastMs = tMs
 
-        let detections = detector.detect(frame).filter { enabled.contains($0.cls) }
+        let detections = Self.detect(detector, frame, in: studyArea).filter { enabled.contains($0.cls) }
         let result = tracker.update(detections, tMs: tMs)
         let aspect = Float(frame.width) / Float(frame.height)
         let produced = counter.update(zones: zones, frameAspect: aspect, active: result.active, removed: result.removed, tMs: tMs)
@@ -118,6 +122,22 @@ final class AnalysisEngine: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         counter.finish(zones: zones, frameAspect: frameAspect)
         return (counter.events, thumbs, lastMs)
+    }
+
+    /// Runs the detector on the study area only and maps the boxes back to the whole frame.
+    private static func detect(_ detector: VehicleDetector, _ frame: CGImage, in area: RectN?) -> [Detection] {
+        let w = CGFloat(frame.width), h = CGFloat(frame.height)
+        guard let area, area.width < 0.98 || area.height < 0.98 else { return detector.detect(frame) }
+        let rect = CGRect(x: CGFloat(area.left) * w, y: CGFloat(area.top) * h,
+                          width: CGFloat(area.width) * w, height: CGFloat(area.height) * h)
+            .intersection(CGRect(x: 0, y: 0, width: w, height: h)).integral
+        guard rect.width >= 32, rect.height >= 32, let crop = frame.cropping(to: rect) else { return detector.detect(frame) }
+        let l = Float(rect.minX / w), t = Float(rect.minY / h), sw = Float(rect.width / w), sh = Float(rect.height / h)
+        return detector.detect(crop).map { d in
+            var d = d
+            d.box = RectN(left: l + d.box.left * sw, top: t + d.box.top * sh, right: l + d.box.right * sw, bottom: t + d.box.bottom * sh)
+            return d
+        }
     }
 
     /// Crop around the vehicle (with some margin), at most 200 px, as JPEG.

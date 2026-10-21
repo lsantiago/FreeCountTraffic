@@ -40,72 +40,26 @@ struct AnalysisView: View {
     private var events: [CountEvent] { model.snapshot?.events ?? [] }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
+        GeometryReader { geo in
+            let landscape = geo.size.width > geo.size.height
+            VStack(spacing: 0) {
                 TopBar(title: source == .camera ? "Live Camera" : "Video File", onBack: {
                     model.leaveAnalysis()
                     onBack()
                 }, trailing: AnyView(
                     Button { showSettings = true } label: { Image(systemName: "gearshape").font(.system(size: 18)) }
                 ))
-
-                FrameView(
-                    frame: model.snapshot?.frame,
-                    tracks: model.snapshot?.tracks ?? [],
-                    trails: model.snapshot?.trails ?? [:],
-                    fps: model.running && model.showFps ? model.snapshot?.fps : nil,
-                    zones: model.zones,
-                    counts: Dictionary(grouping: events, by: { $0.zoneId }).mapValues { $0.count },
-                    selectedId: model.selectedZoneId,
-                    onSelect: { model.selectedZoneId = $0 },
-                    onRectChange: { model.setRect($0, $1) }
-                )
-
-                VStack(alignment: .leading, spacing: 10) {
-                    if !model.modelReady { Text("Loading detection model…").font(.caption) }
-                    if let m = model.message { Text(m).font(.subheadline).foregroundColor(Theme.orange) }
-
-                    if source == .video { videoControls }
-
-                    HStack(spacing: 8) {
-                        Image(systemName: "pencil").foregroundColor(Theme.orange)
-                        TextField(source == .camera ? "Session name (default: address)" : "Session name",
-                                  text: Binding(get: { model.sessionName }, set: { model.setSessionName($0) }))
-                            .textFieldStyle(.roundedBorder)
-                            .disabled(model.running)
+                // the picture never takes the whole screen (vertical videos, phone turned sideways): the controls
+                // always keep their own scrollable space next to or below it
+                if landscape {
+                    HStack(alignment: .top, spacing: 0) {
+                        frameView.frame(width: geo.size.width * 0.6)
+                        controlsScroll
                     }
-
-                    actionButton
-
-                    if !model.running, let id = model.lastSessionId, model.sessions.contains(where: { $0.id == id }) {
-                        Button { onResults(id) } label: {
-                            Label("Open results: graph, validation, export", systemImage: "chart.bar.xaxis")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-
-                    Text("Boxes").font(.title2.weight(.bold)).padding(.top, 6)
-                    ForEach(Array(model.zones.enumerated()), id: \.element.id) { i, z in boxRow(i, z) }
-                    Button { model.addZone() } label: { Text("+ Add box") }
-                        .buttonStyle(.bordered)
-                    Text("Drag a box to move it, drag its white corner dot to resize. A moving vehicle is counted when its centre enters the box. Use the arrows button to count only one direction.")
-                        .font(.caption)
-
-                    boxSettings
-
-                    if !events.isEmpty {
-                        Text("Results").font(.title2.weight(.bold)).padding(.top, 8)
-                        ResultsPanel(events: events, zones: model.zones)
-                    }
-                    Color.clear.frame(height: 0)
-                        .onChange(of: model.lastSessionId) { id in
-                            // the CI autotest stays on this screen
-                            if let id, !model.autotestRequested { onResults(id) }
-                        }
+                } else {
+                    frameView.frame(height: min(geo.size.height * 0.48, geo.size.width / frameAspect))
+                    controlsScroll
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
             }
         }
         .onAppear { model.selectSource(source) }
@@ -127,6 +81,77 @@ struct AnalysisView: View {
             if (try? FileManager.default.copyItem(at: url, to: dest)) != nil {
                 model.loadVideo(dest, displayName: url.deletingPathExtension().lastPathComponent)
             }
+        }
+    }
+
+    private var frameAspect: CGFloat {
+        guard let f = model.snapshot?.frame, f.height > 0 else { return 16.0 / 9.0 }
+        return CGFloat(f.width) / CGFloat(f.height)
+    }
+
+    private var frameView: some View {
+        FrameView(
+            frame: model.snapshot?.frame,
+            tracks: model.snapshot?.tracks ?? [],
+            trails: model.snapshot?.trails ?? [:],
+            fps: model.running && model.showFps ? model.snapshot?.fps : nil,
+            zones: model.zones,
+            counts: Dictionary(grouping: events, by: { $0.zoneId }).mapValues { $0.count },
+            selectedId: model.selectedZoneId,
+            studyArea: model.studyArea,
+            onSelect: { model.selectedZoneId = $0 },
+            onZoneChange: { model.setRect($0, $1, angle: $2) },
+            onStudyAreaChange: { model.setStudyArea($0) }
+        )
+    }
+
+    private var controlsScroll: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                if !model.modelReady { Text("Loading detection model…").font(.caption) }
+                if let m = model.message { Text(m).font(.subheadline).foregroundColor(Theme.orange) }
+    
+                if source == .video { videoControls }
+    
+                HStack(spacing: 8) {
+                    Image(systemName: "pencil").foregroundColor(Theme.orange)
+                    TextField(source == .camera ? "Session name (default: address)" : "Session name",
+                              text: Binding(get: { model.sessionName }, set: { model.setSessionName($0) }))
+                        .textFieldStyle(.roundedBorder)
+                        .disabled(model.running)
+                }
+    
+                actionButton
+    
+                if !model.running, let id = model.lastSessionId, model.sessions.contains(where: { $0.id == id }) {
+                    Button { onResults(id) } label: {
+                        Label("Open results: graph, validation, export", systemImage: "chart.bar.xaxis")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
+    
+                Text("Boxes").font(.title2.weight(.bold)).padding(.top, 6)
+                ForEach(Array(model.zones.enumerated()), id: \.element.id) { i, z in boxRow(i, z) }
+                Button { model.addZone() } label: { Text("+ Add box") }
+                    .buttonStyle(.bordered)
+                Text("Drag a box to move it, any corner dot to resize it and the round arrow above it to rotate it. A moving vehicle is counted when its centre enters the box. Use the arrows button to count only one direction. Pinch or tap the % button to zoom (drag the picture to look around); Study area limits the analysis to part of the picture, which helps with distant vehicles.")
+                    .font(.caption)
+    
+                boxSettings
+    
+                if !events.isEmpty {
+                    Text("Results").font(.title2.weight(.bold)).padding(.top, 8)
+                    ResultsPanel(events: events, zones: model.zones)
+                }
+                Color.clear.frame(height: 0)
+                    .onChange(of: model.lastSessionId) { id in
+                        // the CI autotest stays on this screen
+                        if let id, !model.autotestRequested { onResults(id) }
+                    }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
     }
 

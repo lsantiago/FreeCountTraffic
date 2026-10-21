@@ -5,7 +5,7 @@ import Foundation
 /// Like the reference app, a vehicle is counted as soon as its centre point enters a zone, once per zone and track,
 /// provided it is moving (at least `minMove` of the frame height over the last `motionWindowMs`; parked vehicles are
 /// never counted). If the zone has a `direction`, vehicles moving another way are ignored.
-/// The event's arrow is the sign of the movement along the zone's long axis.
+/// The event's arrow is the sign of the movement along the zone's long axis (boxes may be rotated).
 /// Speed is added to the event when the vehicle leaves the zone (or its track ends inside it) after travelling at
 /// least `minProgress` of the zone length: zone length (m) * travelled fraction / time inside.
 public final class ZoneCounter {
@@ -73,8 +73,10 @@ public final class ZoneCounter {
             for z in zones {
                 let key = Key(zoneId: z.id, trackId: t.id)
                 let horizontal = Self.isHorizontal(z, frameAspect: frameAspect)
-                if z.rect.contains(t.box.cx, t.box.cy) {
-                    let pos = horizontal ? t.box.cx : t.box.cy
+                if z.contains(t.box.cx, t.box.cy, frameAspect: frameAspect) {
+                    // position along the long axis as a fraction of the box length
+                    let p = z.local(t.box.cx, t.box.cy, frameAspect: frameAspect)
+                    let pos = horizontal ? p.u : p.v
                     if var st = states[key] {
                         st.lastPos = pos
                         st.lastMs = tMs
@@ -86,7 +88,8 @@ public final class ZoneCounter {
                         if let want = z.direction, !want.accepts(dx: dx, dy: dy) {
                             decided[key] = .some(nil)
                         } else {
-                            let along = horizontal ? dx : dy
+                            let (c, s) = z.axis
+                            let along = horizontal ? dx * c + dy * s : -dx * s + dy * c
                             let arrow = horizontal ? (along >= 0 ? "→" : "←") : (along >= 0 ? "↓" : "↑")
                             let e = CountEvent(zoneId: z.id, zoneName: z.name, trackId: t.id, cls: t.cls, direction: arrow,
                                                speedKmh: nil, timeMs: tMs, score: t.score)
@@ -125,9 +128,8 @@ public final class ZoneCounter {
 
     private func addSpeed(_ z: Zone, _ horizontal: Bool, _ key: Key, _ st: InZone) {
         guard let entry = decided[key], let index = entry, index < events.count else { return }
-        let axisLen = horizontal ? z.rect.width : z.rect.height
-        guard axisLen > 0, let len = z.lengthMeters, len > 0 else { return }
-        let progress = abs(st.lastPos - st.entryPos) / axisLen
+        guard let len = z.lengthMeters, len > 0 else { return }
+        let progress = abs(st.lastPos - st.entryPos)
         let dtSec = Float(st.lastMs - st.entryMs) / 1000
         if progress >= minProgress && dtSec > 0.2 {
             events[index].speedKmh = len * progress / dtSec * 3.6

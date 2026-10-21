@@ -150,6 +150,21 @@ final class ZoneCounterTests: XCTestCase {
         XCTAssertEqual(produced.count, 1)
         XCTAssertEqual(produced[0].direction, "↓")
     }
+
+    func testRotatedZone() {
+        // the horizontal lane box turned 90°: on screen it now runs top to bottom, ~0.11 of the width wide
+        let turned = Zone(id: 3, name: "Turned", rect: zone.rect, lengthMeters: 30, angle: .pi / 2)
+        XCTAssertTrue(turned.contains(0.5, 0.95, frameAspect: aspect))
+        XCTAssertFalse(turned.contains(0.7, 0.5, frameAspect: aspect))
+        XCTAssertTrue(zone.contains(0.7, 0.5, frameAspect: aspect))
+
+        let counter = ZoneCounter()
+        let produced = run(counter, turned, [(0.1, 0), (0.3, 1000), (0.5, 2000), (0.7, 3000), (0.9, 4000)], vertical: true)
+        XCTAssertEqual(produced.count, 1)
+        counter.finish(zones: [turned], frameAspect: aspect)
+        // travelled 0.8 of the frame height = 0.75 of the box length (0.6 * 16/9 of the height) in 4 s
+        XCTAssertEqual(counter.events[0].speedKmh ?? 0, 30 * 0.75 / 4 * 3.6, accuracy: 0.1)
+    }
 }
 
 final class SummaryAndCsvTests: XCTestCase {

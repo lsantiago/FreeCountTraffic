@@ -76,6 +76,11 @@ final class AppModel: ObservableObject {
         return [Zone(id: 1, name: "Zone 1", rect: RectN(left: 0.2, top: 0.4, right: 0.8, bottom: 0.6))]
     }()
     @Published var selectedZoneId: Int?
+    /// Part of the frame analysed (nil = whole frame).
+    @Published var studyArea: RectN? = {
+        guard let data = UserDefaults.standard.data(forKey: "studyArea") else { return nil }
+        return try? JSONDecoder().decode(RectN.self, from: data)
+    }()
     /// Name of the next session: video file name, or the address from GPS for the camera; editable.
     @Published var sessionName = ""
     @Published var confidence: Float = UserDefaults.standard.object(forKey: "confidence") as? Float ?? 0.30 {
@@ -155,7 +160,7 @@ final class AppModel: ObservableObject {
     // MARK: boxes
 
     private func syncEngine() {
-        engine.configure(zones: zones, enabled: enabledClasses, confidence: confidence, saveImages: saveImages)
+        engine.configure(zones: zones, enabled: enabledClasses, confidence: confidence, saveImages: saveImages, studyArea: studyArea)
         if let data = try? JSONEncoder().encode(zones) { UserDefaults.standard.set(data, forKey: "zones") }
     }
 
@@ -183,8 +188,22 @@ final class AppModel: ObservableObject {
         syncEngine()
     }
 
-    func setRect(_ id: Int, _ rect: RectN) {
-        if let i = zones.firstIndex(where: { $0.id == id }) { zones[i].rect = rect; syncEngine() }
+    func setRect(_ id: Int, _ rect: RectN, angle: Float? = nil) {
+        if let i = zones.firstIndex(where: { $0.id == id }) {
+            zones[i].rect = rect
+            zones[i].angle = angle.flatMap { $0 == 0 ? nil : $0 }
+            syncEngine()
+        }
+    }
+
+    func setStudyArea(_ area: RectN?) {
+        studyArea = area
+        if let area, let data = try? JSONEncoder().encode(area) {
+            UserDefaults.standard.set(data, forKey: "studyArea")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "studyArea")
+        }
+        syncEngine()
     }
 
     func rename(_ id: Int, _ name: String) {
