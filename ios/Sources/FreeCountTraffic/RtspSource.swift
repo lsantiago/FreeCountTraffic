@@ -345,7 +345,7 @@ private struct SdpTrack {
         var clock: Int64 = 90000
         var control: String?
         var fmtp: [String: String] = [:]
-        for raw in sdp.split(whereSeparator: { $0 == "\n" || $0 == "\r" }) {
+        for raw in sdp.split(whereSeparator: \.isNewline) { // "\r\n" is a single Character
             let line = raw.trimmingCharacters(in: .whitespaces)
             if line.hasPrefix("m=") {
                 if codec != nil { break }
