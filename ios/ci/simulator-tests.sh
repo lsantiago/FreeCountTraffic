@@ -70,7 +70,10 @@ if command -v mediamtx >/dev/null && command -v ffmpeg >/dev/null; then
   mediamtx "${TMPDIR:-/tmp}/mediamtx.yml" > screenshots/rtsp_server.log 2>&1 &
   MTX=$!
   sleep 3
-  ffmpeg -nostdin -loglevel warning -re -stream_loop -1 -i ../ci/testdata/vehicles_short.mp4 -an     -c:v libx264 -preset veryfast -tune zerolatency -bf 0 -g 25     -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/test > screenshots/rtsp_ffmpeg.log 2>&1 &
+  # encode once up front (no B-frames, like IP cameras), then publish without re-encoding: a live x264 encoder
+  # competing with the simulator for CPU stalled and dropped the stream
+  ffmpeg -nostdin -loglevel error -y -i ../ci/testdata/vehicles_short.mp4 -an     -c:v libx264 -preset veryfast -bf 0 -g 25 "${TMPDIR:-/tmp}/rtsp_src.mp4"
+  ffmpeg -nostdin -loglevel warning -re -stream_loop -1 -i "${TMPDIR:-/tmp}/rtsp_src.mp4" -c copy     -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/test > screenshots/rtsp_ffmpeg.log 2>&1 &
   FF=$!
   sleep 4
   xcrun simctl launch "$UDID" "$BUNDLE" -autotest_rtsp rtsp://127.0.0.1:8554/test -autotest_seconds 40 -autotest_zones "$ZONES"
