@@ -138,7 +138,7 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
         if (source == SourceType.CAMERA) CameraBinding(vm)
         if (source == SourceType.RTSP) rtspActive?.let { RtspLoop(vm, rtspTexture, it) }
 
-        val frameView: @Composable (Modifier) -> Unit = { m ->
+        val frameView: @Composable (Modifier, Boolean) -> Unit = { m, fillWidth ->
         FrameView(
             frame = state.frame,
             tracks = state.tracks,
@@ -150,6 +150,7 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
             counts = countsByZone,
             studyArea = vm.studyArea,
             onStudyAreaChange = { vm.changeStudyArea(it) },
+            fillWidth = fillWidth,
             background = {
                 if (source == SourceType.RTSP && rtspActive != null) {
                     RtspPlayerView(rtspActive!!, onTexture = { rtspTexture = it }, onError = { vm.message = it })
@@ -259,7 +260,8 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
             Text(
                 "Drag a box to move it, any corner dot to resize it and the round arrow above it to rotate it. A moving " +
                     "vehicle is counted when its centre enters the box. Tap the arrows next to a box to count only one " +
-                    "direction. Pinch or tap the % button to zoom (drag the picture to look around); Study area limits " +
+                    "direction. Pinch or tap the % button to zoom (drag the picture to look around; a vertical picture fills " +
+                    "the width, drag it up or down to see the rest); Study area limits " +
                     "the analysis to part of the picture, which helps with distant vehicles.",
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -345,12 +347,13 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
             val h = maxHeight
             if (w > h) {
                 Row(Modifier.fillMaxSize()) {
-                    frameView(Modifier.fillMaxHeight().width(w * 0.6f))
+                    frameView(Modifier.fillMaxHeight().width(w * 0.6f), false)
                     controls(Modifier.weight(1f).fillMaxHeight())
                 }
             } else {
                 Column(Modifier.fillMaxSize()) {
-                    frameView(Modifier.fillMaxWidth().height(minOf(h * 0.48f, w / aspect)))
+                    // a vertical picture fills the screen width (cropped top and bottom, drag to see the rest)
+                    frameView(Modifier.fillMaxWidth().height(minOf(h * 0.48f, w / aspect)), true)
                     controls(Modifier.weight(1f).fillMaxWidth())
                 }
             }

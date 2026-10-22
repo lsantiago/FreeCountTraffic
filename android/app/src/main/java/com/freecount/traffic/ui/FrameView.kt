@@ -40,6 +40,7 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -100,15 +101,21 @@ private class Grab(val mode: Mode, val zoneId: Int?, val start: ViewBox, val sta
 
 private val ZOOM_STEPS = listOf(1f, 1.5f, 2f, 3f, 4f)
 
-/** Keeps the zoomed picture covering the view (or centred along an axis where it is smaller than the view). */
-private fun clampOrigin(o: Offset, d: Size, v: Size) = Offset(
-    if (d.width <= v.width) (v.width - d.width) / 2f else o.x.coerceIn(v.width - d.width, 0f),
-    if (d.height <= v.height) (v.height - d.height) / 2f else o.y.coerceIn(v.height - d.height, 0f),
-)
+/**
+ * Keeps the zoomed picture covering the view (or centred along an axis where it is smaller than the view).
+ * An unspecified origin centres the picture.
+ */
+private fun clampOrigin(origin: Offset, d: Size, v: Size): Offset {
+    val o = if (origin.isSpecified) origin else Offset((v.width - d.width) / 2f, (v.height - d.height) / 2f)
+    return Offset(
+        if (d.width <= v.width) (v.width - d.width) / 2f else o.x.coerceIn(v.width - d.width, 0f),
+        if (d.height <= v.height) (v.height - d.height) / 2f else o.y.coerceIn(v.height - d.height, 0f),
+    )
+}
 
-/** The picture at 100%: as large as fits in the view. */
-private fun baseSize(v: Size, aspect: Float): Size {
-    val w = minOf(v.width, v.height * aspect)
+/** The picture at 100%: as large as fits in the view, or as wide as the view for a vertical picture ([fillWidth]). */
+private fun baseSize(v: Size, aspect: Float, fillWidth: Boolean): Size {
+    val w = if (fillWidth && aspect < 1f) v.width else minOf(v.width, v.height * aspect)
     return Size(w, w / aspect)
 }
 
@@ -116,18 +123,18 @@ private fun baseSize(v: Size, aspect: Float): Size {
  * Where the picture is drawn in the view: zooming enlarges it over the whole view (like the reference app),
  * not only inside its own letterboxed rectangle.
  */
-private fun contentRect(v: Size, aspect: Float, zoom: Float, origin: Offset): Rect {
-    val b = baseSize(v, aspect)
+private fun contentRect(v: Size, aspect: Float, fillWidth: Boolean, zoom: Float, origin: Offset): Rect {
+    val b = baseSize(v, aspect, fillWidth)
     val d = Size(b.width * zoom, b.height * zoom)
     return Rect(clampOrigin(origin, d, v), d)
 }
 
 /** Zoom keeping the picture point under [anchor] in place; returns the new origin. */
-private fun zoomOrigin(v: Size, aspect: Float, zoom: Float, origin: Offset, next: Float, anchor: Offset): Offset {
-    val c = contentRect(v, aspect, zoom, origin)
+private fun zoomOrigin(v: Size, aspect: Float, fillWidth: Boolean, zoom: Float, origin: Offset, next: Float, anchor: Offset): Offset {
+    val c = contentRect(v, aspect, fillWidth, zoom, origin)
     val qx = (anchor.x - c.left) / c.width
     val qy = (anchor.y - c.top) / c.height
-    val b = baseSize(v, aspect)
+    val b = baseSize(v, aspect, fillWidth)
     val d = Size(b.width * next, b.height * next)
     return clampOrigin(Offset(anchor.x - qx * d.width, anchor.y - qy * d.height), d, v)
 }
@@ -135,8 +142,10 @@ private fun zoomOrigin(v: Size, aspect: Float, zoom: Float, origin: Offset, next
 /**
  * Frame + live boxes + editable counting boxes, with zoom/pan and an optional study area.
  * Zone coordinates are normalized to the frame; everything is drawn and edited in view pixels.
- * At 100% the picture fits inside the space given by [modifier] (vertical videos included); zooming enlarges it over
- * the whole space. Double tap: 200% around the tapped point, again: back to 100%.
+ * At 100% the picture fits inside the space given by [modifier], except a vertical picture with [fillWidth] (vertical
+ * videos, the phone camera held upright, like the reference app): it fills the whole width and the part that does not
+ * fit is reached by dragging the picture up or down. Zooming enlarges it over the whole space.
+ * Double tap: 200% around the tapped point, again: back to 100%.
  */
 @Composable
 fun FrameView(
@@ -151,6 +160,7 @@ fun FrameView(
     studyArea: RectN? = null,
     onStudyAreaChange: (RectN?) -> Unit = {},
     background: @Composable () -> Unit = {},
+    fillWidth: Boolean = false,
 ) {
     val aspect = frame?.let { it.width / it.height.toFloat() } ?: (16f / 9f)
     val image = remember(frame) { frame?.asImageBitmap() }
@@ -164,7 +174,7 @@ fun FrameView(
     val onSelectNow by rememberUpdatedState(onSelect)
 
     var zoom by remember { mutableFloatStateOf(1f) }
-    var pan by remember { mutableStateOf(Offset.Zero) }
+    var pan by remember { mutableStateOf(Offset.Unspecified) } // unspecified = centred
     var editingArea by remember { mutableStateOf(false) }
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
     val density = LocalDensity.current.density
@@ -174,7 +184,7 @@ fun FrameView(
 
     var zoomMenu by remember { mutableStateOf(false) }
     val viewF = Size(viewSize.width.toFloat(), viewSize.height.toFloat())
-    val content = if (viewSize == IntSize.Zero) Rect.Zero else contentRect(viewF, aspect, zoom, pan)
+    val content = if (viewSize == IntSize.Zero) Rect.Zero else contentRect(viewF, aspect, fillWidth, zoom, pan)
     val dens = LocalDensity.current
 
     Box(modifier.background(Color.Black).clipToBounds().onSizeChanged { viewSize = it }) {
@@ -193,14 +203,14 @@ fun FrameView(
             Canvas(
                 Modifier
                     .fillMaxSize()
-                    .pointerInput(viewSize, aspect) {
+                    .pointerInput(viewSize, aspect, fillWidth) {
                         val v = Size(size.width.toFloat(), size.height.toFloat())
-                        fun cr() = contentRect(v, aspect, zoom, pan)
+                        fun cr() = contentRect(v, aspect, fillWidth, zoom, pan)
 
                         fun clampPan(p: Offset) = clampOrigin(p, cr().size, v)
                         fun setZoom(z: Float, anchor: Offset) {
                             val next = z.coerceIn(1f, 4f)
-                            pan = zoomOrigin(v, aspect, zoom, pan, next, anchor)
+                            pan = zoomOrigin(v, aspect, fillWidth, zoom, pan, next, anchor)
                             zoom = next
                         }
                         fun box(r: RectN, angle: Float): ViewBox {
@@ -220,9 +230,12 @@ fun FrameView(
                         fun near(a: Offset, b: Offset) = hypot(a.x - b.x, a.y - b.y) <= handleRadius
 
                         // handles of the selected box first, then any box (selected first), otherwise the picture (pan)
+                        // when it is larger than the view (zoomed in, or a vertical picture filling the width)
                         fun grab(p: Offset): Grab? {
-                            val pan = cr().topLeft
-                            val panGrab = if (zoom > 1f) Grab(Mode.Pan, null, ViewBox(Offset.Zero, 0f, 0f, 0f), pan) else null
+                            val c = cr()
+                            val pan = c.topLeft
+                            val canPan = c.width > v.width + 0.5f || c.height > v.height + 0.5f
+                            val panGrab = if (canPan) Grab(Mode.Pan, null, ViewBox(Offset.Zero, 0f, 0f, 0f), pan) else null
                             if (editingArea) {
                                 val area = areaNow ?: return null
                                 val b = box(area, 0f)
@@ -346,7 +359,7 @@ fun FrameView(
                                 onClick = {
                                     zoomMenu = false
                                     // zoom around the centre of the view
-                                    pan = zoomOrigin(viewF, aspect, zoom, pan, z, Offset(viewF.width / 2f, viewF.height / 2f))
+                                    pan = zoomOrigin(viewF, aspect, fillWidth, zoom, pan, z, Offset(viewF.width / 2f, viewF.height / 2f))
                                     zoom = z
                                 },
                             )
