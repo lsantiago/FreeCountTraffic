@@ -63,7 +63,11 @@ fi
 if command -v mediamtx >/dev/null && command -v ffmpeg >/dev/null; then
   xcrun simctl terminate "$UDID" "$BUNDLE" 2>/dev/null || true
   rm -f "$DATA/Documents/autotest_done" "$DATA/Documents/autotest_result.csv" "$DATA/Documents/autotest_summary.txt"
-  mediamtx > screenshots/rtsp_server.log 2>&1 &
+  # without a config file MediaMTX accepts no path: allow publishing and reading any path
+  printf 'paths:
+  all_others:
+' > "${TMPDIR:-/tmp}/mediamtx.yml"
+  mediamtx "${TMPDIR:-/tmp}/mediamtx.yml" > screenshots/rtsp_server.log 2>&1 &
   MTX=$!
   sleep 3
   ffmpeg -nostdin -loglevel warning -re -stream_loop -1 -i ../ci/testdata/vehicles_short.mp4 -an     -c:v libx264 -preset veryfast -tune zerolatency -bf 0 -g 25     -f rtsp -rtsp_transport tcp rtsp://127.0.0.1:8554/test > screenshots/rtsp_ffmpeg.log 2>&1 &
