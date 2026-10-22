@@ -6,6 +6,8 @@
     <string>Free Count Traffic</string>
     <key>NSCameraUsageDescription</key>
     <string>The camera is used to count vehicles on-device. No video is stored or uploaded.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Connects to IP cameras on your network to count vehicles from their RTSP stream.</string>
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>The location is saved with each counting session so reports show where it was recorded.</string>
     <key>NSPhotoLibraryUsageDescription</key>

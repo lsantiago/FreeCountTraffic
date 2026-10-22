@@ -8,7 +8,9 @@ speed estimation, history, CSV and PDF export. Everything runs on-device.
   YOLO weights are AGPL-3.0: fine for personal / open-source use, check the licence before commercial distribution.
 - **Core logic:** `Sources/TrafficCore` is a Swift port of the Android Kotlin core, tested with the same cases
   (`Tests/TrafficCoreTests`).
-- **Not on iOS yet:** RTSP streams (iOS has no built-in RTSP; it needs a third-party player).
+- **RTSP streams:** built-in client (`RtspSource.swift`, no third-party libraries): RTP over TCP, H.264 / H.265,
+  Basic / Digest authentication, hardware decoding, automatic reconnection once the stream has played. The last URL
+  is remembered in the Keychain (this device only), since it usually carries the camera password.
 
 ## Get an installable app without a Mac (recommended)
 
@@ -20,7 +22,8 @@ GitHub Actions builds it on a macOS runner (see `../.github/workflows/ios.yml`):
    connected by USB. With a free Apple ID the app expires after 7 days and must be reinstalled.
 
 The same run also executes the unit tests, launches the app in an iPhone simulator, takes screenshots and runs a
-headless counting pass over `../ci/testdata/vehicles_short.mp4` (artifact `ios-simulator-screenshots-and-logs`).
+headless counting pass over `../ci/testdata/vehicles_short.mp4`, then a second pass over the same video served as an
+RTSP stream by MediaMTX + FFmpeg (artifact `ios-simulator-screenshots-and-logs`).
 
 ## Build with xtool (optional, needs WSL/Linux or a Mac)
 

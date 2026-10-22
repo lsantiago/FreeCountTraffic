@@ -50,6 +50,9 @@ struct FrameView: View {
     let onSelect: (Int) -> Void
     let onZoneChange: (Int, RectN, Float) -> Void
     let onStudyAreaChange: (RectN?) -> Void
+    /// Vertical pictures (vertical videos, the phone camera held upright) fill the whole width at 100%, like the
+    /// reference app; the part that does not fit is reached by dragging the picture up or down.
+    var fillWidth = false
 
     private enum Mode {
         case move
@@ -69,7 +72,8 @@ struct FrameView: View {
     @State private var active: Active?
     @State private var dragStarted = false
     @State private var zoom: CGFloat = 1
-    @State private var pan: CGSize = .zero
+    /// Picture origin in the view (nil = centred).
+    @State private var pan: CGSize?
     @State private var pinchStart: CGFloat?
     @State private var pinching = false
     @State private var editingArea = false
@@ -165,16 +169,23 @@ struct FrameView: View {
 
     // MARK: coordinates (normalized frame <-> view points)
 
-    /// The picture at 100%: as large as fits in the view.
+    /// The picture at 100%: as large as fits in the view, or as wide as the view for a vertical picture (`fillWidth`).
     private func baseSize(_ v: CGSize) -> CGSize {
-        let w = min(v.width, v.height * aspect)
+        let w = fillWidth && aspect < 1 ? v.width : min(v.width, v.height * aspect)
         return CGSize(width: w, height: w / aspect)
     }
 
     /// Keeps the zoomed picture covering the view (or centred along an axis where it is smaller than the view).
-    private func clampOrigin(_ o: CGSize, _ d: CGSize, _ v: CGSize) -> CGSize {
-        CGSize(width: d.width <= v.width ? (v.width - d.width) / 2 : min(0, max(v.width - d.width, o.width)),
-               height: d.height <= v.height ? (v.height - d.height) / 2 : min(0, max(v.height - d.height, o.height)))
+    private func clampOrigin(_ o: CGSize?, _ d: CGSize, _ v: CGSize) -> CGSize {
+        let o = o ?? CGSize(width: (v.width - d.width) / 2, height: (v.height - d.height) / 2)
+        return CGSize(width: d.width <= v.width ? (v.width - d.width) / 2 : min(0, max(v.width - d.width, o.width)),
+                      height: d.height <= v.height ? (v.height - d.height) / 2 : min(0, max(v.height - d.height, o.height)))
+    }
+
+    /// The picture is larger than the view (zoomed in, or a vertical picture filling the width): dragging it pans.
+    private func canPan(_ size: CGSize) -> Bool {
+        let c = content(size)
+        return c.width > size.width + 0.5 || c.height > size.height + 0.5
     }
 
     /// Where the picture is drawn in the view: zooming enlarges it over the whole view (like the reference app),
@@ -299,7 +310,7 @@ struct FrameView: View {
 
     // MARK: zoom
 
-    private func clampPan(_ p: CGSize, _ size: CGSize) -> CGSize {
+    private func clampPan(_ p: CGSize?, _ size: CGSize) -> CGSize {
         let b = baseSize(size)
         return clampOrigin(p, CGSize(width: b.width * zoom, height: b.height * zoom), size)
     }
@@ -331,7 +342,7 @@ struct FrameView: View {
     private func near(_ a: CGPoint, _ b: CGPoint) -> Bool { hypot(a.x - b.x, a.y - b.y) <= handleRadius }
 
     /// What a touch starting at `p` grabs: handles of the selected box first, then any box (selected first),
-    /// otherwise the picture itself (pan) when zoomed in.
+    /// otherwise the picture itself (pan) when it is larger than the view.
     private func grab(_ p: CGPoint, _ size: CGSize) -> Active? {
         let origin = content(size).origin
         let pan = CGSize(width: origin.x, height: origin.y)
@@ -342,7 +353,7 @@ struct FrameView: View {
                 return Active(mode: .corner(sx: k.sx, sy: k.sy), zoneId: nil, start: b, startPan: pan)
             }
             if b.contains(p) { return Active(mode: .move, zoneId: nil, start: b, startPan: pan) }
-            return zoom > 1 ? Active(mode: .pan, zoneId: nil, start: b, startPan: pan) : nil
+            return canPan(size) ? Active(mode: .pan, zoneId: nil, start: b, startPan: pan) : nil
         }
         if let z = zones.first(where: { $0.id == selectedId }) {
             let b = viewBox(z.rect, angle: z.rotation, size)
@@ -356,7 +367,7 @@ struct FrameView: View {
             onSelect(z.id)
             return Active(mode: .move, zoneId: z.id, start: viewBox(z.rect, angle: z.rotation, size), startPan: pan)
         }
-        return zoom > 1 ? Active(mode: .pan, zoneId: nil, start: ViewBox(c: .zero, hw: 0, hh: 0, angle: 0), startPan: pan) : nil
+        return canPan(size) ? Active(mode: .pan, zoneId: nil, start: ViewBox(c: .zero, hw: 0, hh: 0, angle: 0), startPan: pan) : nil
     }
 
     private func drag(_ size: CGSize) -> some Gesture {

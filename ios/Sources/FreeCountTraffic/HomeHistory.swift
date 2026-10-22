@@ -17,8 +17,8 @@ struct HomeView: View {
                 Text("Use the back camera of this phone, mounted still on a tripod or window.").font(.caption)
                 big("Video file") { onSource(.video) }
                 Text("Analyse a recorded video. Speed uses exact video timestamps.").font(.caption)
-                big("RTSP stream") {}.disabled(true)
-                Text("RTSP streams are not available on iOS yet (Android only).").font(.caption)
+                big("RTSP stream") { onSource(.rtsp) }
+                Text("Connect to an IP camera (H.264 or H.265) on the same network or the internet.").font(.caption)
                 Color.clear.frame(height: 4)
                 Button(action: onHistory) { Text("History").fontWeight(.semibold).frame(maxWidth: .infinity).padding(.vertical, 6) }
                     .buttonStyle(.bordered)

@@ -1,4 +1,5 @@
 import Foundation
+import Security
 import TrafficCore
 import UIKit
 
@@ -123,5 +124,29 @@ enum Exporter {
         let url = tempURL(r.name + ".pdf")
         try data.write(to: url)
         return url
+    }
+}
+
+/// Small secrets (the RTSP URL carries the camera password) kept in the Keychain, on this device only.
+enum Keychain {
+    private static func query(_ key: String) -> [CFString: Any] {
+        [kSecClass: kSecClassGenericPassword, kSecAttrService: "com.freecount.traffic", kSecAttrAccount: key]
+    }
+
+    static func string(_ key: String) -> String? {
+        var q = query(key)
+        q[kSecReturnData] = true
+        q[kSecMatchLimit] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func set(_ key: String, _ value: String) {
+        let data = Data(value.utf8)
+        let attrs: [CFString: Any] = [kSecValueData: data, kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+        if SecItemUpdate(query(key) as CFDictionary, attrs as CFDictionary) == errSecItemNotFound {
+            SecItemAdd(query(key).merging(attrs) { $1 } as CFDictionary, nil)
+        }
     }
 }

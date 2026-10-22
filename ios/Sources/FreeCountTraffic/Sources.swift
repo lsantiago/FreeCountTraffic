@@ -8,7 +8,7 @@ let maxFrameSide: CGFloat = 640
 private let sharedCIContext = CIContext()
 
 /// Downscales so the longest side is `maxFrameSide` and renders to a CGImage.
-private func makeFrame(_ input: CIImage) -> CGImage? {
+func makeFrame(_ input: CIImage) -> CGImage? {
     var image = input
     let longest = max(image.extent.width, image.extent.height)
     if longest > maxFrameSide {

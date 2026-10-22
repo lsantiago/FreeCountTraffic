@@ -74,6 +74,9 @@ jobs:
           name: FreeCountTraffic-unsigned-ipa
           path: ios/FreeCountTraffic-unsigned.ipa
 
+      - name: Install an RTSP test server (MediaMTX + FFmpeg)
+        run: brew install mediamtx ffmpeg
+
       - name: Simulator smoke run + headless counting pass over the test video
         run: bash ci/simulator-tests.sh "$UDID" build-sim/Build/Products/Release-iphonesimulator/FreeCountTraffic.app
 

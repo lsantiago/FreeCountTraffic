@@ -8,7 +8,7 @@ import UIKit
 #endif
 
 enum SourceKind: String, Hashable {
-    case camera, video
+    case camera, video, rtsp
 }
 
 /// Small lock-protected flag read from camera/video threads.
@@ -104,6 +104,10 @@ final class AppModel: ObservableObject {
     @Published var message: String?
     @Published var progress: Double?
     @Published var videoURL: URL?
+    /// Last stream connected to (kept in the Keychain: it usually carries the camera password).
+    @Published var rtspUrl = Keychain.string("rtspUrl") ?? ""
+    /// Stream being played (nil = not connected).
+    @Published var rtspActive: String?
     @Published var modelReady = false
     @Published var snapshot: EngineSnapshot?
     @Published var elapsedMs: Int64 = 0
@@ -120,6 +124,7 @@ final class AppModel: ObservableObject {
     private var videoTask: Task<Void, Never>?
     private var timer: Timer?
     private let camera = CameraSource()
+    private let rtsp = RtspSource()
     private let store = SessionStore()
     private let locator = OneShotLocation()
     private var autotestStarted = false
@@ -233,25 +238,52 @@ final class AppModel: ObservableObject {
         nameEdited = false
         lastSessionId = nil
         if kind == .camera { startCamera() } else { stopCamera() }
+        stopRtsp()
     }
 
     func leaveAnalysis() {
         if running { stop() }
         stopCamera()
+        stopRtsp()
     }
 
-    private func startCamera() {
+    /// Live frames (camera, RTSP): shown at once and analysed while counting.
+    private func liveFrameHandler() -> @Sendable (CGImage, Int64) -> Void {
         let engine = engine
         let flag = countingFlag
         let gate = frameGate
+        return { [weak self] frame, t in
+            let snap = engine.process(frame, tMs: t, counting: flag.value)
+            guard gate.tryEnter() else { return }
+            Task { @MainActor in self?.snapshot = snap; gate.leave() }
+        }
+    }
+
+    private func startCamera() {
         camera.start(
-            onFrame: { [weak self] frame, t in
-                let snap = engine.process(frame, tMs: t, counting: flag.value)
-                guard gate.tryEnter() else { return }
-                Task { @MainActor in self?.snapshot = snap; gate.leave() }
-            },
+            onFrame: liveFrameHandler(),
             onError: { [weak self] text in Task { @MainActor in self?.message = text } }
         )
+    }
+
+    /// Connects (or reconnects) to `rtspUrl`; frames arrive like the camera's.
+    func connectRtsp() {
+        let url = rtspUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard url.lowercased().hasPrefix("rtsp://") else { message = "URL must start with rtsp://"; return }
+        rtspActive = url
+        Keychain.set("rtspUrl", url)
+        if !running { snapshot = nil }
+        message = "Connecting…"
+        rtsp.start(
+            url: url,
+            onFrame: liveFrameHandler(),
+            onStatus: { [weak self] text in Task { @MainActor in self?.message = text } }
+        )
+    }
+
+    private func stopRtsp() {
+        rtsp.stop()
+        rtspActive = nil
     }
 
     private func stopCamera() { camera.stop() }
@@ -280,9 +312,10 @@ final class AppModel: ObservableObject {
     func start() {
         guard !running, modelReady else { return }
         if source == .video && videoURL == nil { message = "Choose a video first."; return }
+        if source == .rtsp && snapshot == nil { message = "Connect to a stream first."; return }
         engine.reset()
         startedAt = Date()
-        if source == .camera {
+        if source != .video {
             clockStart = startedAt
             if !nameEdited { sessionName = "Session " + Self.nameFormatter.string(from: startedAt) }
         }
@@ -426,20 +459,28 @@ final class AppModel: ObservableObject {
         locator.request()
     }
 
-    // MARK: headless test run (CI): launch with `-autotest_video <file in Documents> -autotest_zones "l,t,r,b,len;..."`
+    // MARK: headless test run (CI): launch with `-autotest_video <file in Documents> -autotest_zones "l,t,r,b,len;..."`,
+    // or `-autotest_rtsp <url> [-autotest_seconds N]` to count a stream for N seconds (default 30)
 
     /// 1 = open results, 2 = show graph, 3 = close graph, 4 = validate the first box.
     @Published var autotestStage = 0
 
-    var autotestRequested: Bool { ProcessInfo.processInfo.arguments.contains("-autotest_video") }
+    var autotestRequested: Bool { Self.arg("-autotest_video") != nil || Self.arg("-autotest_rtsp") != nil }
+    var autotestSource: SourceKind { Self.arg("-autotest_rtsp") != nil ? .rtsp : .video }
+
+    private static func arg(_ name: String) -> String? {
+        let args = ProcessInfo.processInfo.arguments
+        return args.firstIndex(of: name).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+    }
 
     func runAutotest() {
-        let args = ProcessInfo.processInfo.arguments
-        guard !autotestStarted, let i = args.firstIndex(of: "-autotest_video"), i + 1 < args.count else { return }
+        guard !autotestStarted, autotestRequested else { return }
         autotestStarted = true
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let file = docs.appendingPathComponent(args[i + 1])
-        let spec = args.firstIndex(of: "-autotest_zones").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } ?? ""
+        let streamUrl = Self.arg("-autotest_rtsp")
+        let file = docs.appendingPathComponent(Self.arg("-autotest_video") ?? "")
+        let seconds = UInt64(Self.arg("-autotest_seconds") ?? "") ?? 30
+        let spec = Self.arg("-autotest_zones") ?? ""
 
         let parsed: [Zone] = spec.split(separator: ";").enumerated().compactMap { n, part in
             let p = part.split(separator: ",").compactMap { Float($0.trimmingCharacters(in: .whitespaces)) }
@@ -448,7 +489,7 @@ final class AppModel: ObservableObject {
         }
 
         Task {
-            guard FileManager.default.fileExists(atPath: file.path) else {
+            guard streamUrl != nil || FileManager.default.fileExists(atPath: file.path) else {
                 try? "missing video".write(to: docs.appendingPathComponent("autotest_done"), atomically: true, encoding: .utf8)
                 return
             }
@@ -458,11 +499,26 @@ final class AppModel: ObservableObject {
                 nextZoneId = (parsed.map { $0.id }.max() ?? 0) + 1
                 syncEngine()
             }
-            selectSource(.video)
-            loadVideo(file)
+            if let streamUrl {
+                selectSource(.rtsp)
+                rtspUrl = streamUrl
+                connectRtsp()
+                for _ in 0..<300 where snapshot == nil { try? await Task.sleep(nanoseconds: 200_000_000) }
+                guard snapshot != nil else {
+                    try? "no rtsp frames: \(message ?? "")".write(to: docs.appendingPathComponent("autotest_done"), atomically: true, encoding: .utf8)
+                    return
+                }
+            } else {
+                selectSource(.video)
+                loadVideo(file)
+            }
             while !modelReady { try? await Task.sleep(nanoseconds: 200_000_000) }
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             start()
+            if streamUrl != nil {
+                try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+                stop()
+            }
             while running { try? await Task.sleep(nanoseconds: 500_000_000) }
 
             let events = snapshot?.events ?? []

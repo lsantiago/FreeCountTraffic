@@ -43,7 +43,7 @@ struct AnalysisView: View {
         GeometryReader { geo in
             let landscape = geo.size.width > geo.size.height
             VStack(spacing: 0) {
-                TopBar(title: source == .camera ? "Live Camera" : "Video File", onBack: {
+                TopBar(title: Self.title(source), onBack: {
                     model.leaveAnalysis()
                     onBack()
                 }, trailing: AnyView(
@@ -53,11 +53,12 @@ struct AnalysisView: View {
                 // always keep their own scrollable space next to or below it
                 if landscape {
                     HStack(alignment: .top, spacing: 0) {
-                        frameView.frame(width: geo.size.width * 0.6)
+                        frameView(fillWidth: false).frame(width: geo.size.width * 0.6)
                         controlsScroll
                     }
                 } else {
-                    frameView.frame(height: min(geo.size.height * 0.48, geo.size.width / frameAspect))
+                    // a vertical picture fills the screen width (cropped top and bottom, drag to see the rest)
+                    frameView(fillWidth: true).frame(height: min(geo.size.height * 0.48, geo.size.width / frameAspect))
                     controlsScroll
                 }
             }
@@ -84,12 +85,20 @@ struct AnalysisView: View {
         }
     }
 
+    private static func title(_ source: SourceKind) -> String {
+        switch source {
+        case .camera: return "Live Camera"
+        case .video: return "Video File"
+        case .rtsp: return "RTSP Stream"
+        }
+    }
+
     private var frameAspect: CGFloat {
         guard let f = model.snapshot?.frame, f.height > 0 else { return 16.0 / 9.0 }
         return CGFloat(f.width) / CGFloat(f.height)
     }
 
-    private var frameView: some View {
+    private func frameView(fillWidth: Bool) -> some View {
         FrameView(
             frame: model.snapshot?.frame,
             tracks: model.snapshot?.tracks ?? [],
@@ -101,7 +110,8 @@ struct AnalysisView: View {
             studyArea: model.studyArea,
             onSelect: { model.selectedZoneId = $0 },
             onZoneChange: { model.setRect($0, $1, angle: $2) },
-            onStudyAreaChange: { model.setStudyArea($0) }
+            onStudyAreaChange: { model.setStudyArea($0) },
+            fillWidth: fillWidth
         )
     }
 
@@ -112,6 +122,7 @@ struct AnalysisView: View {
                 if let m = model.message { Text(m).font(.subheadline).foregroundColor(Theme.orange) }
     
                 if source == .video { videoControls }
+                if source == .rtsp { rtspControls }
     
                 HStack(spacing: 8) {
                     Image(systemName: "pencil").foregroundColor(Theme.orange)
@@ -135,7 +146,7 @@ struct AnalysisView: View {
                 ForEach(Array(model.zones.enumerated()), id: \.element.id) { i, z in boxRow(i, z) }
                 Button { model.addZone() } label: { Text("+ Add box") }
                     .buttonStyle(.bordered)
-                Text("Drag a box to move it, any corner dot to resize it and the round arrow above it to rotate it. A moving vehicle is counted when its centre enters the box. Use the arrows button to count only one direction. Pinch or tap the % button to zoom (drag the picture to look around); Study area limits the analysis to part of the picture, which helps with distant vehicles.")
+                Text("Drag a box to move it, any corner dot to resize it and the round arrow above it to rotate it. A moving vehicle is counted when its centre enters the box. Use the arrows button to count only one direction. Pinch or tap the % button to zoom (drag the picture to look around; a vertical picture fills the width, drag it up or down to see the rest); Study area limits the analysis to part of the picture, which helps with distant vehicles.")
                     .font(.caption)
     
                 boxSettings
@@ -171,7 +182,28 @@ struct AnalysisView: View {
         }
     }
 
-    private var canStart: Bool { model.modelReady && (source == .camera || model.videoURL != nil) }
+    private var rtspControls: some View {
+        HStack(spacing: 8) {
+            TextField("rtsp://user:pass@host:554/stream", text: $model.rtspUrl)
+                .textFieldStyle(.roundedBorder)
+                .keyboardType(.URL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .submitLabel(.go)
+                .onSubmit { model.connectRtsp() }
+            Button { model.connectRtsp() } label: { Text(model.rtspActive == nil ? "Connect" : "Reconnect") }
+                .buttonStyle(.bordered)
+        }
+    }
+
+    private var canStart: Bool {
+        guard model.modelReady else { return false }
+        switch source {
+        case .camera: return true
+        case .video: return model.videoURL != nil
+        case .rtsp: return model.rtspActive != nil && model.snapshot != nil
+        }
+    }
 
     /// Full-width orange bar like the reference app: "■ Stop - 00:01:31s".
     private var actionButton: some View {

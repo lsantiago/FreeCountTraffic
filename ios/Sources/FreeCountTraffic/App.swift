@@ -41,9 +41,9 @@ struct RootView: View {
             if stage == 1, let id = model.lastSessionId { screen = .detail(id) }
         }
         .task {
-            // CI hook: `-autotest_video <file>` jumps straight into a headless counting run.
+            // CI hook: `-autotest_video <file>` / `-autotest_rtsp <url>` jumps straight into a headless counting run.
             if model.autotestRequested {
-                screen = .analysis(.video)
+                screen = .analysis(model.autotestSource)
                 model.runAutotest()
             }
         }
