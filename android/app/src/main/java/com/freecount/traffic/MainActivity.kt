@@ -55,6 +55,8 @@ private fun AppRoot(autotestVideo: String? = null, autotestZones: String? = null
     var source by rememberSaveable { mutableStateOf(SourceType.CAMERA) }
     var sessionId by rememberSaveable { mutableStateOf(0L) }
     var zoneId by rememberSaveable { mutableStateOf(0) }
+    // where Back from the session results goes: 1 = the analysis screen it was opened from, 2 = history
+    var detailBack by rememberSaveable { mutableStateOf(2) }
 
     LaunchedEffect(autotestVideo) {
         if (autotestVideo != null) {
@@ -75,8 +77,8 @@ private fun AppRoot(autotestVideo: String? = null, autotestZones: String? = null
 
     BackHandler(enabled = screen != 0) {
         when (screen) {
-            1 -> { if (vm.running) vm.stop(); screen = 0 }
-            3 -> screen = 2
+            1 -> { vm.leaveAnalysis(); screen = 0 }
+            3 -> screen = detailBack
             4, 5 -> screen = 3
             else -> screen = 0
         }
@@ -87,13 +89,13 @@ private fun AppRoot(autotestVideo: String? = null, autotestZones: String? = null
         1 -> AnalysisScreen(
             vm, source,
             onBack = { screen = 0 },
-            onResults = { sessionId = it; screen = 3 },
+            onResults = { sessionId = it; detailBack = 1; screen = 3 },
             autotest = autotestVideo != null,
         )
-        2 -> HistoryScreen(vm, onBack = { screen = 0 }, onOpen = { sessionId = it; screen = 3 })
+        2 -> HistoryScreen(vm, onBack = { screen = 0 }, onOpen = { sessionId = it; detailBack = 2; screen = 3 })
         3 -> SessionDetailScreen(
             vm, sessionId,
-            onBack = { screen = 2 },
+            onBack = { screen = detailBack },
             onGraph = { screen = 4 },
             onValidate = { zoneId = it; screen = 5 },
         )

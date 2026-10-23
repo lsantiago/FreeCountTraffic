@@ -212,6 +212,54 @@ class AnalysisViewModel(app: Application) : AndroidViewModel(app) {
         lastSessionId = null
     }
 
+    /**
+     * Set when the results of the session just finished are opened from the analysis screen, so coming back keeps its
+     * counts and the Show results / Reset buttons instead of starting over.
+     */
+    private var keepFinishedSession = false
+
+    /** Opening the analysis screen: a fresh start, unless coming back from the results of the session just finished. */
+    fun enterAnalysis(type: SourceType) {
+        if (keepFinishedSession && type == source && lastSessionId != null) {
+            keepFinishedSession = false
+            return
+        }
+        keepFinishedSession = false
+        selectSource(type)
+    }
+
+    /** "Show results" after a session: the analysis screen keeps its state for when the user comes back. */
+    fun openFinishedResults() {
+        keepFinishedSession = true
+    }
+
+    /** Leaving the analysis screen with Back. */
+    fun leaveAnalysis() {
+        if (running) stop()
+        lastSessionId = null
+        keepFinishedSession = false
+    }
+
+    /**
+     * "Reset" after a session (like the reference app): clears the counts and goes back to "Start counting", keeping
+     * the boxes, the source and the chosen video.
+     */
+    fun resetSession() {
+        if (running) return
+        engine.reset()
+        lastSessionId = null
+        keepFinishedSession = false
+        progress = null
+        message = null
+        if (source != SourceType.VIDEO && !nameEdited) sessionName = ""
+        val uri = videoUri
+        if (source == SourceType.VIDEO && uri != null) {
+            viewModelScope.launch(Dispatchers.Default) {
+                VideoSource.firstFrame(getApplication(), uri)?.let { engine.showFrame(it) }
+            }
+        }
+    }
+
     fun loadVideo(uri: Uri) {
         videoUri = uri
         clockStart = null

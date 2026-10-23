@@ -84,9 +84,7 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
     val state by vm.engine.state.collectAsState()
     val zones by vm.zones.collectAsState()
 
-    LaunchedEffect(source) { vm.selectSource(source) }
-    // like the reference app, the summary opens when a session ends (the CI autotest stays here)
-    LaunchedEffect(vm.lastSessionId) { vm.lastSessionId?.let { if (!autotest) onResults(it) } }
+    LaunchedEffect(source) { vm.enterAnalysis(source) }
 
     // Optional location permission (stored with the session).
     val locationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
@@ -118,7 +116,7 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
     Column(Modifier.fillMaxSize().systemBarsPadding()) {
         // --- top bar: ‹ Back | title ---
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { if (vm.running) vm.stop(); onBack() }) { Text("‹ Back", style = MaterialTheme.typography.titleSmall) }
+            TextButton(onClick = { vm.leaveAnalysis(); onBack() }) { Text("‹ Back", style = MaterialTheme.typography.titleSmall) }
             Text(
                 when (source) {
                     SourceType.CAMERA -> "Live Camera"
@@ -210,15 +208,33 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
                 SourceType.VIDEO -> vm.videoUri != null
                 SourceType.RTSP -> rtspActive != null
             }
-            // Big orange action button (shows elapsed time while counting).
+            // session that was just stopped: its results can be opened, or Reset to count again
+            val finishedId = vm.lastSessionId.takeIf { !vm.running }
+            // Big orange action button (shows elapsed time while counting, then "Show results" like the reference app).
             Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                if (!vm.running) {
+                if (vm.running) {
+                    Button(onClick = { vm.stop() }, shape = RoundedCornerShape(12.dp)) {
+                        Text("■  Stop - ${clock(elapsed)}", Modifier.padding(horizontal = 18.dp, vertical = 2.dp), fontWeight = FontWeight.SemiBold)
+                    }
+                } else if (finishedId != null) {
+                    Button(onClick = { vm.openFinishedResults(); onResults(finishedId) }, shape = RoundedCornerShape(12.dp)) {
+                        Text("☰  Show results", Modifier.padding(horizontal = 18.dp, vertical = 2.dp), fontWeight = FontWeight.SemiBold)
+                    }
+                } else {
                     Button(onClick = { vm.start() }, enabled = canStart, shape = RoundedCornerShape(12.dp)) {
                         Text("Start counting", Modifier.padding(horizontal = 18.dp, vertical = 2.dp), fontWeight = FontWeight.SemiBold)
                     }
-                } else {
-                    Button(onClick = { vm.stop() }, shape = RoundedCornerShape(12.dp)) {
-                        Text("■  Stop - ${clock(elapsed)}", Modifier.padding(horizontal = 18.dp, vertical = 2.dp), fontWeight = FontWeight.SemiBold)
+                }
+            }
+            // after Stop: Reset clears the counts and brings back "Start counting" (boxes are kept)
+            if (finishedId != null) {
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Button(
+                        onClick = { vm.resetSession() },
+                        shape = RoundedCornerShape(50),
+                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = androidx.compose.ui.graphics.Color(0xFFF04444)),
+                    ) {
+                        Text("↺  Reset", Modifier.padding(horizontal = 10.dp), fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
