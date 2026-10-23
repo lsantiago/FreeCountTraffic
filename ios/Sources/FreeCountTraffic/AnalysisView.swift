@@ -36,6 +36,7 @@ struct AnalysisView: View {
     @State private var lengthText = ""
     @State private var lengthZoneId: Int?
     @State private var showSettings = false
+    @State private var lastEventCount = 0
 
     private var events: [CountEvent] { model.snapshot?.events ?? [] }
 
@@ -63,10 +64,12 @@ struct AnalysisView: View {
                 }
             }
         }
-        .onAppear { model.selectSource(source) }
+        .onAppear { model.enterAnalysis(source) }
         .sheet(isPresented: $showSettings) { SettingsView().environmentObject(model) }
-        .onChange(of: events.count) { _ in
-            if model.soundOn { AudioServicesPlaySystemSound(1057) }
+        .onChange(of: events.count) { count in
+            // only new vehicles beep (not Reset clearing the counts)
+            if count > lastEventCount && model.soundOn { AudioServicesPlaySystemSound(1057) }
+            lastEventCount = count
         }
         .onChange(of: pickerItem) { item in
             guard let item else { return }
@@ -133,13 +136,18 @@ struct AnalysisView: View {
                 }
     
                 actionButton
-    
-                if !model.running, let id = model.lastSessionId, model.sessions.contains(where: { $0.id == id }) {
-                    Button { onResults(id) } label: {
-                        Label("Open results: graph, validation, export", systemImage: "chart.bar.xaxis")
-                            .frame(maxWidth: .infinity)
+
+                // after Stop: Reset clears the counts and brings back "Start counting" (boxes are kept)
+                if finishedSessionId != nil {
+                    Button { model.resetSession() } label: {
+                        Label("Reset", systemImage: "arrow.counterclockwise")
+                            .font(.headline)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 22)
+                            .padding(.vertical, 10)
+                            .background(Color.red, in: Capsule())
                     }
-                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
                 }
     
                 Text("Boxes").font(.title2.weight(.bold)).padding(.top, 6)
@@ -155,11 +163,6 @@ struct AnalysisView: View {
                     Text("Results").font(.title2.weight(.bold)).padding(.top, 8)
                     ResultsPanel(events: events, zones: model.zones)
                 }
-                Color.clear.frame(height: 0)
-                    .onChange(of: model.lastSessionId) { id in
-                        // the CI autotest stays on this screen
-                        if let id, !model.autotestRequested { onResults(id) }
-                    }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
@@ -205,15 +208,31 @@ struct AnalysisView: View {
         }
     }
 
-    /// Full-width orange bar like the reference app: "■ Stop - 00:01:31s".
+    /// Session that was just stopped (its results can be opened, or Reset to count again).
+    private var finishedSessionId: UUID? {
+        guard !model.running, let id = model.lastSessionId, model.sessions.contains(where: { $0.id == id }) else { return nil }
+        return id
+    }
+
+    /// Full-width orange bar like the reference app: "■ Stop - 00:01:31s", then "Show results" once stopped.
     private var actionButton: some View {
         Button {
-            if model.running { model.stop() } else { model.start() }
+            if model.running {
+                model.stop()
+            } else if let id = finishedSessionId {
+                model.openFinishedResults()
+                onResults(id)
+            } else {
+                model.start()
+            }
         } label: {
             HStack(spacing: 10) {
                 if model.running {
                     Image(systemName: "stop.fill")
                     Text("Stop - \(clock(model.elapsedMs))s")
+                } else if finishedSessionId != nil {
+                    Image(systemName: "list.clipboard")
+                    Text("Show results")
                 } else {
                     Image(systemName: "record.circle")
                     Text("Start counting")
@@ -223,9 +242,9 @@ struct AnalysisView: View {
             .foregroundColor(.white)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 14)
-            .background(Theme.orange.opacity(model.running || canStart ? 1 : 0.4), in: RoundedRectangle(cornerRadius: 14))
+            .background(Theme.orange.opacity(model.running || finishedSessionId != nil || canStart ? 1 : 0.4), in: RoundedRectangle(cornerRadius: 14))
         }
-        .disabled(!model.running && !canStart)
+        .disabled(!model.running && finishedSessionId == nil && !canStart)
     }
 
     private func boxRow(_ i: Int, _ z: Zone) -> some View {

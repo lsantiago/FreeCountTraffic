@@ -253,6 +253,44 @@ final class AppModel: ObservableObject {
         if running { stop() }
         stopCamera()
         stopRtsp()
+        lastSessionId = nil
+        keepFinishedSession = false
+    }
+
+    /// Set when the results of the session just finished are opened from the analysis screen, so coming back keeps
+    /// its counts and the Show results / Reset buttons instead of starting over.
+    private var keepFinishedSession = false
+
+    /// Opening the analysis screen: a fresh start, unless coming back from the results of the session just finished.
+    func enterAnalysis(_ kind: SourceKind) {
+        if keepFinishedSession && kind == source && lastSessionId != nil {
+            keepFinishedSession = false
+            if kind == .camera { startCamera() }
+            return
+        }
+        keepFinishedSession = false
+        selectSource(kind)
+    }
+
+    /// "Show results" after a session: the analysis screen keeps its state for when the user comes back.
+    func openFinishedResults() { keepFinishedSession = true }
+
+    /// "Reset" after a session (like the reference app): clears the counts and goes back to "Start counting",
+    /// keeping the boxes, the source and the chosen video.
+    func resetSession() {
+        guard !running else { return }
+        engine.reset()
+        lastSessionId = nil
+        keepFinishedSession = false
+        progress = nil
+        message = nil
+        if source != .video && !nameEdited { sessionName = "" }
+        if let s = snapshot { snapshot = EngineSnapshot(frame: s.frame, tracks: [], events: [], fps: 0) }
+        if source == .video, let url = videoURL {
+            Task {
+                if let frame = await VideoSource.firstFrame(url) { snapshot = EngineSnapshot(frame: frame, tracks: [], events: [], fps: 0) }
+            }
+        }
     }
 
     /// Live frames (camera, RTSP): shown at once and analysed while counting.

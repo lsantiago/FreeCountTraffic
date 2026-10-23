@@ -23,6 +23,8 @@ enum Screen: Equatable {
 struct RootView: View {
     @EnvironmentObject var model: AppModel
     @State private var screen: Screen = .home
+    /// Analysis screen the open results came from (Back returns there), nil = opened from History.
+    @State private var resultsFrom: SourceKind?
 
     var body: some View {
         Group {
@@ -30,11 +32,11 @@ struct RootView: View {
             case .home:
                 HomeView(onSource: { screen = .analysis($0) }, onHistory: { screen = .history })
             case .analysis(let kind):
-                AnalysisView(source: kind, onBack: { screen = .home }, onResults: { screen = .detail($0) })
+                AnalysisView(source: kind, onBack: { screen = .home }, onResults: { resultsFrom = kind; screen = .detail($0) })
             case .history:
-                HistoryView(onBack: { screen = .home }, onOpen: { screen = .detail($0) })
+                HistoryView(onBack: { screen = .home }, onOpen: { resultsFrom = nil; screen = .detail($0) })
             case .detail(let id):
-                SessionDetailView(id: id, onBack: { screen = .history })
+                SessionDetailView(id: id, onBack: { screen = resultsFrom.map { .analysis($0) } ?? .history })
             }
         }
         .onChange(of: model.autotestStage) { stage in
