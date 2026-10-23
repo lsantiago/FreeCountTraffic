@@ -146,7 +146,7 @@ struct AnalysisView: View {
                 ForEach(Array(model.zones.enumerated()), id: \.element.id) { i, z in boxRow(i, z) }
                 Button { model.addZone() } label: { Text("+ Add box") }
                     .buttonStyle(.bordered)
-                Text("Drag a box to move it, any corner dot to resize it and the round arrow above it to rotate it. A moving vehicle is counted when its centre enters the box. Use the arrows button to count only one direction. Pinch or tap the % button to zoom (drag the picture to look around; a vertical picture fills the width, drag it up or down to see the rest); Study area limits the analysis to part of the picture, which helps with distant vehicles.")
+                Text("Drag a box to move it, any corner dot to resize it and the round arrow above it to rotate it (it snaps every 15°; Box settings has an exact rotation slider). A moving vehicle is counted when its centre enters the box. Use the arrows button to count only one direction. Pinch or tap the % button to zoom (drag the picture to look around; a vertical picture fills the width, drag it up or down to see the rest); Study area limits the analysis to part of the picture, which helps with distant vehicles.")
                     .font(.caption)
     
                 boxSettings
@@ -277,6 +277,19 @@ struct AnalysisView: View {
             .keyboardType(.decimalPad)
             .textFieldStyle(.roundedBorder)
             Text("Real distance covered by the box's long side.").font(.caption)
+            let degrees = Int((z.rotation * 180 / .pi).rounded())
+            HStack {
+                Text("Rotation")
+                Spacer()
+                Text("\(degrees)°").monospacedDigit()
+                Button("Reset") { model.setAngle(z.id, 0) }
+                    .buttonStyle(.bordered)
+                    .disabled(degrees == 0)
+            }
+            Slider(value: Binding(
+                get: { Double(z.rotation * 180 / .pi) },
+                set: { model.setAngle(z.id, Float($0 * .pi / 180)) }
+            ), in: -180...180, step: 1)
             if model.zones.count > 1 {
                 Button(role: .destructive) { model.deleteZone(z.id) } label: { Text("Delete \(z.name)") }
             }

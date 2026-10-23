@@ -1,5 +1,6 @@
 import SwiftUI
 import TrafficCore
+import UIKit
 
 /// A box (counting box or study area) in view points: centre, half sizes and clockwise rotation.
 private struct ViewBox {
@@ -32,8 +33,22 @@ private struct ViewBox {
         return signs.map { (sx: $0.0, sy: $0.1, p: world($0.0 * hw, $0.1 * hh)) }
     }
 
-    /// The rotation handle sits above the middle of the top edge.
-    var rotateHandle: CGPoint { world(0, -hh - 28) }
+    /// The rotation handle sits above the middle of the top edge (below the bottom edge when `below`).
+    func rotateHandle(below: Bool) -> CGPoint { world(0, below ? hh + 28 : -hh - 28) }
+
+    /// Middle of the edge the rotation handle hangs from.
+    func handleEdge(below: Bool) -> CGPoint { world(0, below ? hh : -hh) }
+
+    /// Clockwise angle in radians kept within -pi...pi.
+    static func normalized(_ a: CGFloat) -> CGFloat {
+        var a = a.truncatingRemainder(dividingBy: 2 * .pi)
+        if a > .pi { a -= 2 * .pi }
+        if a <= -.pi { a += 2 * .pi }
+        return a
+    }
+
+    /// Whole degrees shown to the user.
+    static func degrees(_ a: CGFloat) -> Int { Int((a * 180 / .pi).rounded()) }
 }
 
 /// Frame + live boxes + editable counting boxes, with zoom/pan and an optional study area.
@@ -77,8 +92,13 @@ struct FrameView: View {
     @State private var pinchStart: CGFloat?
     @State private var pinching = false
     @State private var editingArea = false
+    /// Snap angle the box is resting on while rotating (a haptic tick marks each new one).
+    @State private var snappedAngle: CGFloat?
 
     private let handleRadius: CGFloat = 24
+    /// Rotation snaps to every 15 degrees when within ~3 degrees of it.
+    private static let snapStep = CGFloat.pi / 12
+    private static let snapTolerance: CGFloat = 0.05
     private let minSide: CGFloat = 18
     private static let zoomSteps: [CGFloat] = [1, 1.5, 2, 3, 4]
 
@@ -92,14 +112,20 @@ struct FrameView: View {
             let size = geo.size
             let c = content(size)
             ZStack(alignment: .topLeading) {
-                Color.black
-                if let frame {
-                    Image(decorative: frame, scale: 1).resizable()
-                        .frame(width: c.width, height: c.height)
-                        .offset(x: c.minX, y: c.minY)
+                // the picture is an overlay so a picture larger than the view (zoomed in, vertical picture filling the
+                // width) does not grow the stack: the canvas must keep the view's size and origin, or the boxes are
+                // drawn away from where touches grab them
+                Color.black.overlay(alignment: .topLeading) {
+                    if let frame {
+                        Image(decorative: frame, scale: 1).resizable()
+                            .frame(width: c.width, height: c.height)
+                            .offset(x: c.minX, y: c.minY)
+                            .allowsHitTesting(false)
+                    }
                 }
                 // drawn in view points (outside the zoom transform) so lines and labels stay sharp
-                Canvas { ctx, s in draw(ctx, s) }
+                Canvas { ctx, _ in draw(ctx, size) }
+                    .frame(width: size.width, height: size.height)
             }
             .frame(width: size.width, height: size.height)
             .clipped()
@@ -221,6 +247,17 @@ struct FrameView: View {
         return RectN(left: Float(cx - w), top: Float(cy - h), right: Float(cx + w), bottom: Float(cy + h))
     }
 
+    /// The rotation handle goes below the box when there is no room for it above (box at the top of the view).
+    private func handleBelow(_ b: ViewBox, _ size: CGSize) -> Bool {
+        func inside(_ p: CGPoint) -> Bool { p.x >= 12 && p.x <= size.width - 12 && p.y >= 12 && p.y <= size.height - 12 }
+        return !inside(b.rotateHandle(below: false)) && inside(b.rotateHandle(below: true))
+    }
+
+    private var rotatingId: Int? {
+        guard let a = active, case .rotate = a.mode else { return nil }
+        return a.zoneId
+    }
+
     // MARK: drawing
 
     private func draw(_ ctx: GraphicsContext, _ size: CGSize) {
@@ -280,19 +317,29 @@ struct FrameView: View {
             ctx.fill(Path(roundedRect: badge, cornerRadius: 8), with: .color(Color(white: 0.12, opacity: 0.75)))
             ctx.draw(count, at: CGPoint(x: badge.midX, y: badge.midY))
 
-            if selected { drawHandles(ctx, b, color: c, rotation: true) }
+            if selected { drawHandles(ctx, b, color: c, rotationBelow: handleBelow(b, size)) }
+
+            // angle readout while rotating
+            if z.id == rotatingId {
+                let deg = ctx.resolve(Text("\(ViewBox.degrees(b.angle))°").font(.system(size: 13, weight: .bold).monospacedDigit()).foregroundColor(.white))
+                let ds = deg.measure(in: size)
+                let pill = CGRect(x: b.c.x - (ds.width + 14) / 2, y: b.c.y + 16, width: ds.width + 14, height: 22)
+                ctx.fill(Path(roundedRect: pill, cornerRadius: 11), with: .color(Theme.orange))
+                ctx.draw(deg, at: CGPoint(x: pill.midX, y: pill.midY))
+            }
         }
 
         if editingArea, let area = studyArea {
-            drawHandles(ctx, viewBox(area, angle: 0, size), color: .white, rotation: false)
+            drawHandles(ctx, viewBox(area, angle: 0, size), color: .white, rotationBelow: nil)
         }
     }
 
-    private func drawHandles(_ ctx: GraphicsContext, _ b: ViewBox, color: Color, rotation: Bool) {
+    /// Corner dots, plus the rotation handle unless `rotationBelow` is nil.
+    private func drawHandles(_ ctx: GraphicsContext, _ b: ViewBox, color: Color, rotationBelow: Bool?) {
         for corner in b.corners { dot(ctx, corner.p, color) }
-        guard rotation else { return }
-        let top = b.world(0, -b.hh)
-        let h = b.rotateHandle
+        guard let below = rotationBelow else { return }
+        let top = b.handleEdge(below: below)
+        let h = b.rotateHandle(below: below)
         var stem = Path()
         stem.move(to: top)
         stem.addLine(to: h)
@@ -357,7 +404,7 @@ struct FrameView: View {
         }
         if let z = zones.first(where: { $0.id == selectedId }) {
             let b = viewBox(z.rect, angle: z.rotation, size)
-            if near(b.rotateHandle, p) { return Active(mode: .rotate, zoneId: z.id, start: b, startPan: pan) }
+            if near(b.rotateHandle(below: handleBelow(b, size)), p) { return Active(mode: .rotate, zoneId: z.id, start: b, startPan: pan) }
             if let k = b.corners.first(where: { near($0.p, p) }) {
                 return Active(mode: .corner(sx: k.sx, sy: k.sy), zoneId: z.id, start: b, startPan: pan)
             }
@@ -402,13 +449,19 @@ struct FrameView: View {
                     b.hw = w / 2
                     b.hh = h / 2
                 case .rotate:
-                    var angle = atan2(p.y - a.start.c.y, p.x - a.start.c.x) + .pi / 2
-                    if angle > .pi { angle -= 2 * .pi }
-                    // snap to straight angles
-                    let quarter = CGFloat.pi / 2
-                    let snapped = (angle / quarter).rounded() * quarter
-                    if abs(angle - snapped) < 0.07 { angle = snapped }
-                    if abs(angle) < 0.001 { angle = 0 }
+                    // turn by how much the finger turned around the centre: grabbing the handle off-centre does not
+                    // make the box jump
+                    let c0 = a.start.c
+                    let turned = atan2(p.y - c0.y, p.x - c0.x) - atan2(v.startLocation.y - c0.y, v.startLocation.x - c0.x)
+                    var angle = ViewBox.normalized(a.start.angle + turned)
+                    let snapped = ViewBox.normalized((angle / Self.snapStep).rounded() * Self.snapStep)
+                    if abs(ViewBox.normalized(angle - snapped)) < Self.snapTolerance {
+                        angle = abs(snapped) < 0.001 ? 0 : snapped
+                        if snappedAngle != angle { UISelectionFeedbackGenerator().selectionChanged() }
+                        snappedAngle = angle
+                    } else {
+                        snappedAngle = nil
+                    }
                     b.angle = angle
                 }
                 if let id = a.zoneId {
@@ -421,6 +474,7 @@ struct FrameView: View {
             .onEnded { _ in
                 dragStarted = false
                 active = nil
+                snappedAngle = nil
                 pinching = pinchStart != nil
             }
     }

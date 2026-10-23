@@ -201,6 +201,14 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Box settings: exact rotation (clockwise radians, 0 = straight).
+    func setAngle(_ id: Int, _ angle: Float) {
+        if let i = zones.firstIndex(where: { $0.id == id }) {
+            zones[i].angle = abs(angle) < 0.0001 ? nil : angle
+            syncEngine()
+        }
+    }
+
     func setStudyArea(_ area: RectN?) {
         studyArea = area
         if let area, let data = try? JSONEncoder().encode(area) {
