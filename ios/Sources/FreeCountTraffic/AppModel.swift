@@ -263,6 +263,8 @@ final class AppModel: ObservableObject {
 
     /// Opening the analysis screen: a fresh start, unless coming back from the results of the session just finished.
     func enterAnalysis(_ kind: SourceKind) {
+        // the CI autotest has already set up this source (and maybe connected the stream): do not start over
+        if autotestStarted && kind == source { return }
         if keepFinishedSession && kind == source && lastSessionId != nil {
             keepFinishedSession = false
             if kind == .camera { startCamera() }
