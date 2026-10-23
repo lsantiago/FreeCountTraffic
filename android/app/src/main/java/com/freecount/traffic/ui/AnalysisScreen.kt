@@ -258,7 +258,8 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
             }
             OutlinedButton(onClick = { vm.addZone() }, shape = RoundedCornerShape(12.dp)) { Text("+ Add box") }
             Text(
-                "Drag a box to move it, any corner dot to resize it and the round arrow above it to rotate it. A moving " +
+                "Drag a box to move it, any corner dot to resize it and the round arrow above it to rotate it (it snaps " +
+                    "every 15°; Box settings has an exact rotation slider). A moving " +
                     "vehicle is counted when its centre enters the box. Tap the arrows next to a box to count only one " +
                     "direction. Pinch or tap the % button to zoom (drag the picture to look around; a vertical picture fills " +
                     "the width, drag it up or down to see the rest); Study area limits " +
@@ -283,6 +284,17 @@ fun AnalysisScreen(vm: AnalysisViewModel, source: SourceType, onBack: () -> Unit
                     label = { Text("Box length in meters (enables speed)") },
                     supportingText = { Text("Real distance covered by the box's long side.") },
                     singleLine = true, modifier = Modifier.fillMaxWidth(),
+                )
+                val degrees = Math.toDegrees(z.angle.toDouble()).roundToInt()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Rotation", Modifier.weight(1f))
+                    Text("$degrees°", style = MaterialTheme.typography.bodyLarge)
+                    TextButton(onClick = { vm.setAngle(z.id, 0f) }, enabled = degrees != 0) { Text("Reset") }
+                }
+                Slider(
+                    value = Math.toDegrees(z.angle.toDouble()).toFloat().coerceIn(-180f, 180f),
+                    onValueChange = { vm.setAngle(z.id, Math.toRadians(it.roundToInt().toDouble()).toFloat()) },
+                    valueRange = -180f..180f,
                 )
                 if (zones.size > 1) TextButton(onClick = { vm.deleteZone(z.id) }) { Text("Delete ${z.name}") }
             }

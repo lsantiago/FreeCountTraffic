@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -54,7 +55,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -71,6 +74,23 @@ import kotlin.math.sin
 
 private fun rot(x: Float, y: Float, a: Float) = Offset(x * cos(a) - y * sin(a), x * sin(a) + y * cos(a))
 
+private const val TWO_PI = (2 * PI).toFloat()
+
+/** Rotation snaps to every 15 degrees when within ~3 degrees of it. */
+private const val SNAP_STEP = (PI / 12).toFloat()
+private const val SNAP_TOLERANCE = 0.05f
+
+/** Clockwise angle in radians kept within -pi..pi. */
+private fun normalized(a: Float): Float {
+    var r = a % TWO_PI
+    if (r > PI) r -= TWO_PI
+    if (r <= -PI) r += TWO_PI
+    return r
+}
+
+/** Whole degrees shown to the user. */
+private fun degrees(a: Float) = Math.toDegrees(a.toDouble()).roundToInt()
+
 /** A box (counting box or study area) in view pixels: centre, half sizes and clockwise rotation. */
 private data class ViewBox(val c: Offset, val hw: Float, val hh: Float, val angle: Float) {
     /** View point of a point given in the box's own frame. */
@@ -85,8 +105,17 @@ private data class ViewBox(val c: Offset, val hw: Float, val hh: Float, val angl
     val corners: List<Triple<Float, Float, Offset>>
         get() = listOf(-1f to -1f, 1f to -1f, 1f to 1f, -1f to 1f).map { (sx, sy) -> Triple(sx, sy, world(sx * hw, sy * hh)) }
 
-    /** The rotation handle sits above the middle of the top edge. */
-    fun rotateHandle(gap: Float) = world(0f, -hh - gap)
+    /** The rotation handle sits above the middle of the top edge (below the bottom edge when [below]). */
+    fun rotateHandle(gap: Float, below: Boolean) = world(0f, if (below) hh + gap else -hh - gap)
+
+    /** Middle of the edge the rotation handle hangs from. */
+    fun handleEdge(below: Boolean) = world(0f, if (below) hh else -hh)
+}
+
+/** The rotation handle goes below the box when there is no room for it above (box at the top of the view). */
+private fun handleBelow(b: ViewBox, gap: Float, view: Size, margin: Float): Boolean {
+    fun inside(p: Offset) = p.x in margin..(view.width - margin) && p.y in margin..(view.height - margin)
+    return !inside(b.rotateHandle(gap, false)) && inside(b.rotateHandle(gap, true))
 }
 
 private sealed interface Mode {
@@ -176,6 +205,9 @@ fun FrameView(
     var zoom by remember { mutableFloatStateOf(1f) }
     var pan by remember { mutableStateOf(Offset.Unspecified) } // unspecified = centred
     var editingArea by remember { mutableStateOf(false) }
+    // box being rotated (its angle is shown while turning)
+    var rotatingId by remember { mutableStateOf<Int?>(null) }
+    val haptic = LocalHapticFeedback.current
     var viewSize by remember { mutableStateOf(IntSize.Zero) }
     val density = LocalDensity.current.density
     val handleRadius = 24f * density
@@ -192,6 +224,9 @@ fun FrameView(
             Box(
                 Modifier
                     .offset { IntOffset(content.left.roundToInt(), content.top.roundToInt()) }
+                    // a picture larger than the view (zoomed in, vertical picture filling the width) must keep its
+                    // size: plain size() would squeeze it into the view and the boxes would no longer match it
+                    .wrapContentSize(Alignment.TopStart, unbounded = true)
                     .size(with(dens) { content.width.toDp() }, with(dens) { content.height.toDp() }),
             ) {
                 background()
@@ -205,6 +240,8 @@ fun FrameView(
                     .fillMaxSize()
                     .pointerInput(viewSize, aspect, fillWidth) {
                         val v = Size(size.width.toFloat(), size.height.toFloat())
+                        // snap angle the box is resting on while rotating (a haptic tick marks each new one)
+                        var snappedAngle: Float? = null
                         fun cr() = contentRect(v, aspect, fillWidth, zoom, pan)
 
                         fun clampPan(p: Offset) = clampOrigin(p, cr().size, v)
@@ -245,7 +282,9 @@ fun FrameView(
                             }
                             zonesNow.firstOrNull { it.id == selectedNow }?.let { z ->
                                 val b = box(z.rect, z.angle)
-                                if (near(b.rotateHandle(rotateGap), p)) return Grab(Mode.Rotate, z.id, b, pan)
+                                if (near(b.rotateHandle(rotateGap, handleBelow(b, rotateGap, v, 12f * density)), p)) {
+                                    return Grab(Mode.Rotate, z.id, b, pan)
+                                }
                                 b.corners.firstOrNull { near(it.third, p) }?.let { return Grab(Mode.Corner(it.first, it.second), z.id, b, pan) }
                             }
                             val ordered = zonesNow.sortedByDescending { if (it.id == selectedNow) 1 else 0 }
@@ -278,13 +317,19 @@ fun FrameView(
                                     s.copy(c = fixed + rot(m.sx * bw / 2f, m.sy * bh / 2f, s.angle), hw = bw / 2f, hh = bh / 2f)
                                 }
                                 Mode.Rotate -> {
-                                    var a = atan2(p.y - s.c.y, p.x - s.c.x) + (PI / 2).toFloat()
-                                    if (a > PI) a -= (2 * PI).toFloat()
-                                    // snap to straight angles
-                                    val quarter = (PI / 2).toFloat()
-                                    val snapped = (a / quarter).roundToInt() * quarter
-                                    if (abs(a - snapped) < 0.07f) a = snapped
-                                    if (abs(a) < 0.001f) a = 0f
+                                    // turn by how much the finger turned around the centre: grabbing the handle
+                                    // off-centre does not make the box jump
+                                    val turned = atan2(p.y - s.c.y, p.x - s.c.x) - atan2(start.y - s.c.y, start.x - s.c.x)
+                                    var a = normalized(s.angle + turned)
+                                    val snapped = normalized((a / SNAP_STEP).roundToInt() * SNAP_STEP)
+                                    if (abs(normalized(a - snapped)) < SNAP_TOLERANCE) {
+                                        a = if (abs(snapped) < 0.001f) 0f else snapped
+                                        if (snappedAngle != a) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        snappedAngle = a
+                                    } else {
+                                        snappedAngle = null
+                                    }
+                                    rotatingId = g.zoneId
                                     s.copy(angle = a)
                                 }
                             }
@@ -324,6 +369,8 @@ fun FrameView(
                                     }
                                 }
                             } while (event.changes.any { it.pressed })
+                            rotatingId = null
+                            snappedAngle = null
 
                             // double tap: 200% around the tapped point, again: back to the whole picture
                             if (!moved && !pinched && upAt - down.uptimeMillis < 250) {
@@ -339,7 +386,7 @@ fun FrameView(
                     },
             ) {
                 drawOverlay(
-                    tracksNow, zonesNow, countsNow, selectedNow, areaNow, editingArea, content, rotateGap,
+                    tracksNow, zonesNow, countsNow, selectedNow, areaNow, editingArea, content, rotateGap, rotatingId,
                 )
             }
 
@@ -398,6 +445,7 @@ private fun DrawScope.drawOverlay(
     editingArea: Boolean,
     content: Rect,
     rotateGap: Float,
+    rotatingId: Int?,
 ) {
     fun v(x: Float, y: Float) = Offset(x * content.width + content.left, y * content.height + content.top)
     fun viewRect(r: RectN) = Rect(v(r.left, r.top), v(r.right, r.bottom))
@@ -473,8 +521,9 @@ private fun DrawScope.drawOverlay(
         if (selected) {
             val b = ViewBox(center, hw, hh, z.angle)
             b.corners.forEach { dot(it.third, c) }
-            val top = b.world(0f, -hh)
-            val handle = b.rotateHandle(rotateGap)
+            val below = handleBelow(b, rotateGap, size, 12f * density)
+            val top = b.handleEdge(below)
+            val handle = b.rotateHandle(rotateGap, below)
             drawLine(Color.White, top, handle, 1.5f * density)
             drawCircle(Color.White, 12f * density, handle)
             text.color = android.graphics.Color.BLACK
@@ -482,6 +531,17 @@ private fun DrawScope.drawOverlay(
             val g = "↻"
             canvas.drawText(g, handle.x - text.measureText(g) / 2f, handle.y + 5.5f * density, text)
             text.color = android.graphics.Color.WHITE
+        }
+
+        // angle readout while rotating
+        if (z.id == rotatingId) {
+            val deg = "${degrees(z.angle)}°"
+            text.textSize = 13f * density
+            text.isFakeBoldText = true
+            val dw = text.measureText(deg) + 14f * density
+            val top = center.y + 16f * density
+            drawRoundRect(Palette.Orange, Offset(center.x - dw / 2f, top), Size(dw, 22f * density), CornerRadius(11f * density))
+            canvas.drawText(deg, center.x - dw / 2f + 7f * density, top + 15.5f * density, text)
         }
     }
 
