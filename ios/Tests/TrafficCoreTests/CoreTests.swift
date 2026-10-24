@@ -192,9 +192,17 @@ final class SummaryAndCsvTests: XCTestCase {
         let csv = CsvExporter.build(sessionName: "Main, St", events: events)
         let lines = csv.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "\n")
         XCTAssertEqual(lines.count, 4)
-        XCTAssertEqual(lines[0], "session,zone,track_id,class,direction,speed_kmh,time_s,confidence")
+        XCTAssertEqual(lines[0], "session,zone,track_id,class,direction,speed_kmh,time_s,confidence,video_time,clock_time,category")
         XCTAssertTrue(lines[1].hasPrefix("\"Main, St\",A,1,Car,→,40.0,1.00"))
         XCTAssertTrue(lines[3].contains(",3.00"))
+        XCTAssertTrue(lines[1].hasSuffix(",,,AUTOS/CAMIONETAS"))
+        let video = CsvExporter.build(sessionName: "S", events: events, videoTimes: true)
+        XCTAssertTrue(video.components(separatedBy: "\n")[1].hasSuffix(",0:01,,AUTOS/CAMIONETAS"))
+    }
+
+    func testVideoTime() {
+        XCTAssertEqual(CsvExporter.videoTime(187_400), "3:07")
+        XCTAssertEqual(CsvExporter.videoTime(3_787_000), "1:03:07")
     }
 
     func testUniqueCountsAVehicleInTwoBoxesOnce() {

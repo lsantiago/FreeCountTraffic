@@ -21,6 +21,14 @@ struct SessionRecord: Codable, Identifiable {
 
     var startEpochMs: Int64? { clockStart.map { Int64($0.timeIntervalSince1970 * 1000) } }
 
+    /// Session counted from a video file: event times are positions in that video.
+    var isVideo: Bool { source == SourceKind.video.rawValue }
+
+    /// "▶ 3:07" in the video (video sessions) and "07:03:07" on the clock (when the real start time is known).
+    func eventTimes(_ e: CountEvent) -> (video: String?, clock: String?) {
+        (isVideo ? "▶ " + CsvExporter.videoTime(e.timeMs) : nil, startEpochMs.map { CsvExporter.clock(e.timeMs, startEpochMs: $0) })
+    }
+
     /// ms from local midnight to the start of the session (0 when the real start time is unknown).
     var dayOffsetMs: Int64 {
         guard let start = clockStart else { return 0 }
@@ -90,7 +98,8 @@ enum Exporter {
     /// form's table (periods x movements x categories).
     static func csv(_ r: SessionRecord, ficha: Bool = false) throws -> [URL] {
         let events = tempURL(r.name + ".csv")
-        try CsvExporter.build(sessionName: r.name, events: r.events).write(to: events, atomically: true, encoding: .utf8)
+        try CsvExporter.build(sessionName: r.name, events: r.events, videoTimes: r.isVideo, startEpochMs: r.startEpochMs)
+            .write(to: events, atomically: true, encoding: .utf8)
         let table = tempURL(r.name + "_15min.csv")
         try CsvExporter.intervals(sessionName: r.name, events: r.events, zones: r.zones, intervalMs: quarterMs,
                                   durationMs: Int64(r.durationMs), startEpochMs: r.startEpochMs)

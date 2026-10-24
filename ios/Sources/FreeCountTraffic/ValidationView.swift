@@ -23,6 +23,13 @@ struct ValidationView: View {
     }
 
     @State private var filter: Filter?
+    /// Vehicle shown enlarged (tap on a photo).
+    @State private var enlarged: Enlarged?
+
+    private struct Enlarged: Identifiable {
+        let trackId: Int
+        var id: Int { trackId }
+    }
 
     init(sessionId: UUID, zoneId: Int?, ficha: Bool = false, onlyUnclassified: Bool = false) {
         self.sessionId = sessionId
@@ -45,7 +52,8 @@ struct ValidationView: View {
         NavigationStack {
             // a vehicle crossing several boxes is shown once when every box is listed
             let all = record?.events ?? []
-            let events = zoneId.map { id in all.filter { $0.zoneId == id } } ?? Summary.unique(all)
+            // in time order, to go through a recorded video from start to end while validating
+            let events = (zoneId.map { id in all.filter { $0.zoneId == id } } ?? Summary.unique(all)).sorted { $0.timeMs < $1.timeMs }
             let filters: [FilterChip] = ficha
                 ? FichaCategory.allCases.compactMap { c in
                     let n = events.filter { FichaCategory($0) == c }.count
@@ -68,6 +76,13 @@ struct ValidationView: View {
                         Text("Pick each truck's class by axles from its photo: C-2G, C-3-4, C5 or ≥C6. Vans with single rear wheels go to AUTOS/CAMIONETAS, with double rear wheels to BUS 2 EJES. Use the trash button for anything that is not a vehicle.")
                             .font(.caption).foregroundColor(.secondary)
                     }
+                    if record?.isVideo == true {
+                        Text("▶ is the position in the video, when the vehicle's centre entered the box: start the player 1–2 s earlier to see it come in. Tap a photo to enlarge it.")
+                            .font(.caption).foregroundColor(.secondary)
+                    } else {
+                        Text("The time is when the vehicle's centre entered the box. Tap a photo to enlarge it.")
+                            .font(.caption).foregroundColor(.secondary)
+                    }
                     if shown.isEmpty {
                         Text(filter == .category(.sinClasificar) ? "Every truck is classified." : "No detections.")
                             .foregroundColor(.secondary)
@@ -86,6 +101,11 @@ struct ValidationView: View {
                              ?? (ficha ? "Classify trucks" : "Validate Detections"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .sheet(item: $enlarged) { item in
+                if let e = Summary.unique((record?.events ?? []).filter { $0.trackId == item.trackId }).first {
+                    detail(e)
+                }
+            }
         }
     }
 
@@ -123,9 +143,80 @@ struct ValidationView: View {
         }
     }
 
-    private func tile(_ e: CountEvent) -> some View {
+    /// Video position (bold) and clock time of the moment the vehicle entered the box.
+    @ViewBuilder private func times(_ e: CountEvent, large: Bool = false) -> some View {
+        let t: (video: String?, clock: String?) = record?.eventTimes(e) ?? (video: nil, clock: nil)
+        HStack(spacing: 6) {
+            if let video = t.video {
+                Text(video).font((large ? Font.title3 : .caption).weight(.bold).monospacedDigit())
+            }
+            if let clock = t.clock {
+                Text(clock).font((large ? Font.body : .caption2).monospacedDigit())
+                    .foregroundColor(t.video == nil ? .primary : .secondary)
+            }
+        }
+    }
+
+    /// Class (or E50 form column) picker of a vehicle.
+    private func classMenu(_ e: CountEvent) -> some View {
         let category = FichaCategory(e)
-        return VStack(alignment: .leading, spacing: 4) {
+        return Menu {
+            if ficha {
+                ForEach(FichaCategory.allCases.filter { $0 != .sinClasificar }, id: \.self) { c in
+                    Button { pick(e, c) } label: { Text((c == category ? "✓ " : "") + c.rawValue) }
+                }
+            } else {
+                ForEach(VehicleClass.allCases, id: \.self) { c in
+                    Button { model.reclassify(sessionId, trackId: e.trackId, to: c) } label: {
+                        Text((c == e.cls ? "✓ " : "") + c.label)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                ClassIcon(cls: e.cls, size: 12)
+                Text(ficha ? (category?.rawValue ?? e.cls.label) : e.cls.label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundColor(ficha && category == .sinClasificar ? Theme.orange : .primary)
+                    .lineLimit(1)
+                Image(systemName: "chevron.down").font(.system(size: 9)).foregroundColor(.secondary)
+            }
+        }
+    }
+
+    /// Enlarged photo, to see the axles of a truck: both times, box, direction and the class picker.
+    private func detail(_ e: CountEvent) -> some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    if let img = model.thumbnail(sessionId, trackId: e.trackId) {
+                        Image(uiImage: img).resizable().scaledToFit()
+                            .frame(maxWidth: .infinity)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    } else {
+                        Color.gray.opacity(0.15).frame(height: 160).overlay(ClassIcon(cls: e.cls, size: 40))
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    times(e, large: true)
+                    Text("\(e.zoneName) \(e.direction) · \(e.score.map { "\(Int(($0 * 100).rounded())) % confidence" } ?? "")")
+                        .font(.subheadline).foregroundColor(.secondary)
+                    classMenu(e).scaleEffect(1.25, anchor: .leading)
+                    Button(role: .destructive) {
+                        delete(e)
+                        enlarged = nil
+                    } label: { Label("Not a vehicle: delete", systemImage: "trash") }
+                        .padding(.top, 6)
+                }
+                .padding(16)
+            }
+            .navigationTitle("Vehicle")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { enlarged = nil } } }
+        }
+    }
+
+    private func tile(_ e: CountEvent) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
             ZStack(alignment: .topTrailing) {
                 Group {
                     if let img = model.thumbnail(sessionId, trackId: e.trackId) {
@@ -138,6 +229,8 @@ struct ValidationView: View {
                 .frame(maxWidth: .infinity)
                 .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .contentShape(Rectangle())
+                .onTapGesture { enlarged = Enlarged(trackId: e.trackId) }
 
                 Button { delete(e) } label: {
                     Image(systemName: "trash.fill")
@@ -148,28 +241,8 @@ struct ValidationView: View {
                 }
                 .padding(4)
             }
-            Menu {
-                if ficha {
-                    ForEach(FichaCategory.allCases.filter { $0 != .sinClasificar }, id: \.self) { c in
-                        Button { pick(e, c) } label: { Text((c == category ? "✓ " : "") + c.rawValue) }
-                    }
-                } else {
-                    ForEach(VehicleClass.allCases, id: \.self) { c in
-                        Button { model.reclassify(sessionId, trackId: e.trackId, to: c) } label: {
-                            Text((c == e.cls ? "✓ " : "") + c.label)
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    ClassIcon(cls: e.cls, size: 12)
-                    Text(ficha ? (category?.rawValue ?? e.cls.label) : e.cls.label)
-                        .font(.caption.weight(.semibold))
-                        .foregroundColor(ficha && category == .sinClasificar ? Theme.orange : .primary)
-                        .lineLimit(1)
-                    Image(systemName: "chevron.down").font(.system(size: 9)).foregroundColor(.secondary)
-                }
-            }
+            times(e)
+            classMenu(e)
             Text("\(e.score.map { "\(Int(($0 * 100).rounded())) %" } ?? "–") · \(e.zoneName) \(e.direction)")
                 .font(.caption2).foregroundColor(.secondary).lineLimit(1)
         }

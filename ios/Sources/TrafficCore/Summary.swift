@@ -125,14 +125,25 @@ public enum CsvExporter {
         return s
     }
 
-    public static func build(sessionName: String, events: [CountEvent]) -> String {
-        var out = "session,zone,track_id,class,direction,speed_kmh,time_s,confidence\n"
+    /// Every counted vehicle. `video_time` (position in the video, to find it in a player) is filled for video
+    /// sessions, `clock_time` when the real start time is known, `category` is the E50 form's column.
+    public static func build(sessionName: String, events: [CountEvent], videoTimes: Bool = false, startEpochMs: Int64? = nil) -> String {
+        var out = "session,zone,track_id,class,direction,speed_kmh,time_s,confidence,video_time,clock_time,category\n"
         for e in events {
             let speed = e.speedKmh.map { String(format: "%.1f", $0) } ?? ""
             let conf = e.score.map { String(format: "%.2f", $0) } ?? ""
-            out += "\(esc(sessionName)),\(esc(e.zoneName)),\(e.trackId),\(e.cls.label),\(e.direction),\(speed),\(String(format: "%.2f", Double(e.timeMs) / 1000)),\(conf)\n"
+            let video = videoTimes ? videoTime(e.timeMs) : ""
+            let clockTime = startEpochMs.map { clock(e.timeMs, startEpochMs: $0) } ?? ""
+            out += "\(esc(sessionName)),\(esc(e.zoneName)),\(e.trackId),\(e.cls.label),\(e.direction),\(speed),\(String(format: "%.2f", Double(e.timeMs) / 1000)),\(conf),"
+            out += "\(video),\(clockTime),\(esc(FichaCategory(e)?.rawValue ?? ""))\n"
         }
         return out
+    }
+
+    /// Position in a video as a player shows it: "3:07" (or "1:03:07" past an hour).
+    public static func videoTime(_ ms: Int64) -> String {
+        let s = Int(max(ms, 0) / 1000)
+        return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
     }
 
     /// "hh:mm:ss" from the start of the session, or the wall-clock time when `startEpochMs` is given.

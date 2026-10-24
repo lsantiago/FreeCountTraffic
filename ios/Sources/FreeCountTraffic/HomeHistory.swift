@@ -152,7 +152,9 @@ struct SessionDetailView: View {
                         Text("Vehicles").font(.headline).padding(.top, 8)
                         ForEach(Array(r.events.enumerated()), id: \.offset) { _, e in
                             let speed = e.speedKmh.map { String(format: " · %.0f km/h", $0) } ?? ""
-                            Text("\(CsvExporter.clock(e.timeMs, startEpochMs: r.startEpochMs))  \(e.zoneName)  \(e.cls.label) \(e.direction)\(speed)")
+                            let t = r.eventTimes(e)
+                            let when: String = [t.video, t.clock ?? CsvExporter.clock(e.timeMs)].compactMap { $0 }.joined(separator: "  ")
+                            Text("\(when)  \(e.zoneName)  \(e.cls.label) \(e.direction)\(speed)")
                                 .font(.caption)
                         }
                     }
