@@ -193,8 +193,11 @@ public struct CountEvent: Codable, Equatable {
     public var speedKmh: Float?
     public var timeMs: Int64
     public var score: Float?
+    /// Axle class picked by a person for a truck (E50 field form); nil = not classified yet.
+    public var axle: AxleClass?
 
-    public init(zoneId: Int, zoneName: String, trackId: Int, cls: VehicleClass, direction: String, speedKmh: Float?, timeMs: Int64, score: Float? = nil) {
+    public init(zoneId: Int, zoneName: String, trackId: Int, cls: VehicleClass, direction: String, speedKmh: Float?, timeMs: Int64,
+                score: Float? = nil, axle: AxleClass? = nil) {
         self.zoneId = zoneId
         self.zoneName = zoneName
         self.trackId = trackId
@@ -203,5 +206,6 @@ public struct CountEvent: Codable, Equatable {
         self.speedKmh = speedKmh
         self.timeMs = timeMs
         self.score = score
+        self.axle = axle
     }
 }

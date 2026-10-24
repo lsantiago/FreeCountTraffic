@@ -26,6 +26,9 @@ final class AnalysisEngine: @unchecked Sendable {
     private var zones: [Zone] = []
     private var enabled: Set<VehicleClass> = [.car, .truck, .bus, .motorcycle]
     private var saveImages = true
+    /// E50 form: every truck keeps its image (beyond the 500 limit and with images off), since a person classifies
+    /// trucks by axles from it.
+    private var keepTruckImages = false
     /// Area of study: when set, only this part of the frame is analysed (at full detector resolution, so distant
     /// vehicles are found more easily).
     private var studyArea: RectN?
@@ -45,12 +48,14 @@ final class AnalysisEngine: @unchecked Sendable {
         detector = fresh
     }
 
-    func configure(zones: [Zone], enabled: Set<VehicleClass>, confidence: Float, saveImages: Bool, studyArea: RectN?) {
+    func configure(zones: [Zone], enabled: Set<VehicleClass>, confidence: Float, saveImages: Bool, keepTruckImages: Bool,
+                   studyArea: RectN?) {
         lock.lock(); defer { lock.unlock() }
         self.zones = zones
         self.studyArea = studyArea
         self.enabled = enabled
         self.saveImages = saveImages
+        self.keepTruckImages = keepTruckImages
         if confidence != self.confidence {
             self.confidence = confidence
             detector?.confidence = confidence
@@ -75,11 +80,10 @@ final class AnalysisEngine: @unchecked Sendable {
         let aspect = Float(frame.width) / Float(frame.height)
         let produced = counter.update(zones: zones, frameAspect: aspect, active: result.active, removed: result.removed, tMs: tMs)
 
-        if saveImages {
-            for e in produced where thumbs[e.trackId] == nil && thumbs.count < Self.maxThumbnails {
-                if let t = result.active.first(where: { $0.id == e.trackId }), let jpeg = Self.thumbnail(frame, t.box) {
-                    thumbs[e.trackId] = jpeg
-                }
+        for e in produced where thumbs[e.trackId] == nil {
+            guard (saveImages && thumbs.count < Self.maxThumbnails) || (keepTruckImages && e.cls == .truck) else { continue }
+            if let t = result.active.first(where: { $0.id == e.trackId }), let jpeg = Self.thumbnail(frame, t.box) {
+                thumbs[e.trackId] = jpeg
             }
         }
 

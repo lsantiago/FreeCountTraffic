@@ -96,6 +96,17 @@ final class AppModel: ObservableObject {
     @Published var showFps: Bool = UserDefaults.standard.object(forKey: "showFps") as? Bool ?? true {
         didSet { UserDefaults.standard.set(showFps, forKey: "showFps") }
     }
+    /// E50 field form: trucks are classified by axles after the session and the PDF follows the paper form.
+    @Published var fichaMode: Bool = UserDefaults.standard.bool(forKey: "fichaMode") {
+        didSet { UserDefaults.standard.set(fichaMode, forKey: "fichaMode"); syncEngine() }
+    }
+    /// Header of the last form filled in (station, observer…), proposed for the next one.
+    var lastFichaInfo: FichaInfo {
+        get {
+            UserDefaults.standard.data(forKey: "fichaInfo").flatMap { try? JSONDecoder().decode(FichaInfo.self, from: $0) } ?? FichaInfo()
+        }
+        set { if let data = try? JSONEncoder().encode(newValue) { UserDefaults.standard.set(data, forKey: "fichaInfo") } }
+    }
     @Published var detectionModel: DetectionModel = DetectionModel(rawValue: UserDefaults.standard.string(forKey: "detectionModel") ?? "") ?? .balanced
     @Published var enabledClasses: Set<VehicleClass> = {
         let saved = (UserDefaults.standard.stringArray(forKey: "enabledClasses") ?? []).compactMap { VehicleClass(rawValue: $0) }
@@ -165,7 +176,8 @@ final class AppModel: ObservableObject {
     // MARK: boxes
 
     private func syncEngine() {
-        engine.configure(zones: zones, enabled: enabledClasses, confidence: confidence, saveImages: saveImages, studyArea: studyArea)
+        engine.configure(zones: zones, enabled: enabledClasses, confidence: confidence, saveImages: saveImages,
+                         keepTruckImages: fichaMode, studyArea: studyArea)
         if let data = try? JSONEncoder().encode(zones) { UserDefaults.standard.set(data, forKey: "zones") }
     }
 
@@ -474,13 +486,24 @@ final class AppModel: ObservableObject {
     }
 
     /// Validation: fix the class of a vehicle (in every box it crossed).
-    func reclassify(_ id: UUID, trackId: Int, to cls: VehicleClass) {
+    func reclassify(_ id: UUID, trackId: Int, to cls: VehicleClass, axle: AxleClass? = nil) {
         guard let i = sessions.firstIndex(where: { $0.id == id }) else { return }
-        for j in sessions[i].events.indices where sessions[i].events[j].trackId == trackId { sessions[i].events[j].cls = cls }
+        for j in sessions[i].events.indices where sessions[i].events[j].trackId == trackId {
+            sessions[i].events[j].cls = cls
+            sessions[i].events[j].axle = cls == .truck ? axle : nil
+        }
         store.save(sessions)
     }
 
     func thumbnail(_ id: UUID, trackId: Int) -> UIImage? { store.thumbnail(id, track: trackId) }
+
+    /// Header of a session's E50 form (also remembered for the next session).
+    func setFichaInfo(_ id: UUID, _ info: FichaInfo) {
+        guard let i = sessions.firstIndex(where: { $0.id == id }) else { return }
+        sessions[i].ficha = info
+        store.save(sessions)
+        lastFichaInfo = info
+    }
 
     private static let nameFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -576,6 +599,18 @@ final class AppModel: ObservableObject {
             let thumbs = sessions.first.map { s in events.filter { store.thumbnail(s.id, track: $0.trackId) != nil }.count } ?? 0
             try? "total=\(events.count)\nunique=\(Summary.unique(events).count)\nimages=\(thumbs)\n\(summary)\n"
                 .write(to: docs.appendingPathComponent("autotest_summary.txt"), atomically: true, encoding: .utf8)
+            // E50 form PDF for the CI artifact (the first truck classified, to show both cases)
+            if var r = sessions.first {
+                if let t = r.events.first(where: { $0.cls == .truck })?.trackId {
+                    for j in r.events.indices where r.events[j].trackId == t { r.events[j].axle = .c34 }
+                }
+                let info = FichaInfo(station: "Estación CI", weather: "Soleado", observer: "Autotest", coordinator: "CI")
+                if let url = try? FichaPDF.pdf(r, info) {
+                    let dest = docs.appendingPathComponent("autotest_ficha.pdf")
+                    try? FileManager.default.removeItem(at: dest)
+                    try? FileManager.default.copyItem(at: url, to: dest)
+                }
+            }
             try? "ok".write(to: docs.appendingPathComponent("autotest_done"), atomically: true, encoding: .utf8)
 
             // UI tour for the CI screenshots: results (+1 s), graph (+6 s), validation (+13 s)

@@ -1,44 +1,89 @@
 import SwiftUI
 import TrafficCore
 
-/// "Validate Detections": the image of every vehicle counted in one box with its class and confidence.
-/// Wrong detections are removed with the trash button; a wrong class is fixed from the tile's menu.
+/// "Validate Detections": the image of every vehicle counted in one box (or in all of them) with its class and
+/// confidence. Wrong detections are removed with the trash button; a wrong class is fixed from the tile's menu.
+/// With the E50 form the classes are the form's columns, and trucks get their axle class here.
 struct ValidationView: View {
     @EnvironmentObject var model: AppModel
     @Environment(\.dismiss) private var dismiss
     let sessionId: UUID
-    let zoneId: Int
-    @State private var filter: VehicleClass?
+    /// nil = every box (E50 form: classify all the trucks of the session)
+    let zoneId: Int?
+    var ficha = false
+
+    private enum Filter: Hashable {
+        case cls(VehicleClass)
+        case category(FichaCategory)
+    }
+
+    private struct FilterChip: Hashable {
+        let title: String
+        let filter: Filter
+    }
+
+    @State private var filter: Filter?
+
+    init(sessionId: UUID, zoneId: Int?, ficha: Bool = false, onlyUnclassified: Bool = false) {
+        self.sessionId = sessionId
+        self.zoneId = zoneId
+        self.ficha = ficha
+        _filter = State(initialValue: onlyUnclassified ? .category(.sinClasificar) : nil)
+    }
 
     private var record: SessionRecord? { model.sessions.first(where: { $0.id == sessionId }) }
 
+    private func matches(_ e: CountEvent, _ f: Filter?) -> Bool {
+        switch f {
+        case nil: return true
+        case .cls(let c): return e.cls == c
+        case .category(let c): return FichaCategory(e) == c
+        }
+    }
+
     var body: some View {
         NavigationStack {
-            let events = (record?.events ?? []).filter { $0.zoneId == zoneId }
-            let classes = VehicleClass.allCases.filter { c in events.contains { $0.cls == c } }
-            let shown = events.filter { filter == nil || $0.cls == filter }
+            // a vehicle crossing several boxes is shown once when every box is listed
+            let all = record?.events ?? []
+            let events = zoneId.map { id in all.filter { $0.zoneId == id } } ?? Summary.unique(all)
+            let filters: [FilterChip] = ficha
+                ? FichaCategory.allCases.compactMap { c in
+                    let n = events.filter { FichaCategory($0) == c }.count
+                    return n > 0 ? FilterChip(title: "\(c == .sinClasificar ? "⚠ " : "")\(c.rawValue) \(n)", filter: .category(c)) : nil
+                }
+                : VehicleClass.allCases.compactMap { c in
+                    let n = events.filter { $0.cls == c }.count
+                    return n > 0 ? FilterChip(title: "\(c.label) \(n)", filter: .cls(c)) : nil
+                }
+            let shown = events.filter { matches($0, filter) }
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
                             chip("All \(events.count)", selected: filter == nil) { filter = nil }
-                            ForEach(classes, id: \.self) { c in
-                                chip("\(c.label) \(events.filter { $0.cls == c }.count)", selected: filter == c) { filter = c }
-                            }
+                            ForEach(filters, id: \.self) { f in chip(f.title, selected: filter == f.filter) { filter = f.filter } }
                         }
                     }
+                    if ficha {
+                        Text("Pick each truck's class by axles from its photo: C-2G, C-3-4, C5 or ≥C6. Vans with single rear wheels go to AUTOS/CAMIONETAS, with double rear wheels to BUS 2 EJES. Use the trash button for anything that is not a vehicle.")
+                            .font(.caption).foregroundColor(.secondary)
+                    }
                     if shown.isEmpty {
-                        Text("No detections.").foregroundColor(.secondary)
+                        Text(filter == .category(.sinClasificar) ? "Every truck is classified." : "No detections.")
+                            .foregroundColor(.secondary)
                     }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 10)], spacing: 10) {
                         ForEach(shown, id: \.trackId) { e in tile(e) }
                     }
-                    Text("Images are kept for the first \(AnalysisEngine.maxThumbnails) vehicles of a session, only on this device.")
+                    Text(ficha
+                         ? "Every truck keeps its image; other vehicles only the first \(AnalysisEngine.maxThumbnails) of a session, only on this device."
+                         : "Images are kept for the first \(AnalysisEngine.maxThumbnails) vehicles of a session, only on this device.")
                         .font(.caption).foregroundColor(.secondary)
                 }
                 .padding(16)
             }
-            .navigationTitle(record?.zones.first(where: { $0.id == zoneId })?.name ?? "Validate Detections")
+            .navigationTitle(zoneId.flatMap { id in record?.zones.first(where: { $0.id == id })?.name }
+                             ?? (ficha ? "Classify trucks" : "Validate Detections"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
@@ -53,8 +98,34 @@ struct ValidationView: View {
         }
     }
 
+    /// Form column -> class (and axles) stored in the event.
+    private func pick(_ e: CountEvent, _ c: FichaCategory) {
+        switch c {
+        case .autos: model.reclassify(sessionId, trackId: e.trackId, to: .car)
+        case .bus: model.reclassify(sessionId, trackId: e.trackId, to: .bus)
+        case .motos: model.reclassify(sessionId, trackId: e.trackId, to: .motorcycle)
+        case .bicicletas: model.reclassify(sessionId, trackId: e.trackId, to: .bicycle)
+        case .c2g: model.reclassify(sessionId, trackId: e.trackId, to: .truck, axle: .c2g)
+        case .c34: model.reclassify(sessionId, trackId: e.trackId, to: .truck, axle: .c34)
+        case .c5: model.reclassify(sessionId, trackId: e.trackId, to: .truck, axle: .c5)
+        case .c6: model.reclassify(sessionId, trackId: e.trackId, to: .truck, axle: .c6)
+        case .sinClasificar: model.reclassify(sessionId, trackId: e.trackId, to: .truck)
+        }
+    }
+
+    private func delete(_ e: CountEvent) {
+        if let zoneId {
+            model.deleteEvent(sessionId, zoneId: zoneId, trackId: e.trackId)
+        } else {
+            for z in Set((record?.events ?? []).filter { $0.trackId == e.trackId }.map { $0.zoneId }) {
+                model.deleteEvent(sessionId, zoneId: z, trackId: e.trackId)
+            }
+        }
+    }
+
     private func tile(_ e: CountEvent) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let category = FichaCategory(e)
+        return VStack(alignment: .leading, spacing: 4) {
             ZStack(alignment: .topTrailing) {
                 Group {
                     if let img = model.thumbnail(sessionId, trackId: e.trackId) {
@@ -68,7 +139,7 @@ struct ValidationView: View {
                 .clipped()
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
-                Button { model.deleteEvent(sessionId, zoneId: zoneId, trackId: e.trackId) } label: {
+                Button { delete(e) } label: {
                     Image(systemName: "trash.fill")
                         .font(.system(size: 12))
                         .foregroundColor(.white)
@@ -78,20 +149,29 @@ struct ValidationView: View {
                 .padding(4)
             }
             Menu {
-                ForEach(VehicleClass.allCases, id: \.self) { c in
-                    Button { model.reclassify(sessionId, trackId: e.trackId, to: c) } label: {
-                        Text((c == e.cls ? "✓ " : "") + c.label)
+                if ficha {
+                    ForEach(FichaCategory.allCases.filter { $0 != .sinClasificar }, id: \.self) { c in
+                        Button { pick(e, c) } label: { Text((c == category ? "✓ " : "") + c.rawValue) }
+                    }
+                } else {
+                    ForEach(VehicleClass.allCases, id: \.self) { c in
+                        Button { model.reclassify(sessionId, trackId: e.trackId, to: c) } label: {
+                            Text((c == e.cls ? "✓ " : "") + c.label)
+                        }
                     }
                 }
             } label: {
                 HStack(spacing: 4) {
                     ClassIcon(cls: e.cls, size: 12)
-                    Text(e.cls.label).font(.caption.weight(.semibold)).foregroundColor(.primary)
+                    Text(ficha ? (category?.rawValue ?? e.cls.label) : e.cls.label)
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(ficha && category == .sinClasificar ? Theme.orange : .primary)
+                        .lineLimit(1)
                     Image(systemName: "chevron.down").font(.system(size: 9)).foregroundColor(.secondary)
                 }
             }
-            Text("\(e.score.map { "\(Int(($0 * 100).rounded())) %" } ?? "–") · \(e.direction)")
-                .font(.caption2).foregroundColor(.secondary)
+            Text("\(e.score.map { "\(Int(($0 * 100).rounded())) %" } ?? "–") · \(e.zoneName) \(e.direction)")
+                .font(.caption2).foregroundColor(.secondary).lineLimit(1)
         }
     }
 }

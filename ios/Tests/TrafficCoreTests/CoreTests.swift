@@ -240,3 +240,42 @@ final class SummaryAndCsvTests: XCTestCase {
         XCTAssertEqual(lines.count, 5)
     }
 }
+
+final class FichaTests: XCTestCase {
+    private let zones = [Zone(id: 1, name: "A", rect: RectN(left: 0, top: 0, right: 1, bottom: 1)),
+                         Zone(id: 2, name: "B", rect: RectN(left: 0, top: 0, right: 1, bottom: 1))]
+
+    private func ev(_ minute: Int64, _ track: Int, _ cls: VehicleClass = .car, zone: Int = 1, dir: String = "↓",
+                    axle: AxleClass? = nil) -> CountEvent {
+        CountEvent(zoneId: zone, zoneName: zone == 1 ? "A" : "B", trackId: track, cls: cls, direction: dir,
+                   speedKmh: nil, timeMs: minute * 60_000, axle: axle)
+    }
+
+    func testCategories() {
+        XCTAssertEqual(FichaCategory(ev(0, 1)), .autos)
+        XCTAssertEqual(FichaCategory(ev(0, 1, .truck)), .sinClasificar)
+        XCTAssertEqual(FichaCategory(ev(0, 1, .truck, axle: .c34)), .c34)
+        XCTAssertEqual(FichaCategory(ev(0, 1, .bus)), .bus)
+        XCTAssertNil(FichaCategory(ev(0, 1, .person)))
+    }
+
+    func testPeriodsFollowTheClock() {
+        // session starts at 07:10 and lasts 25 min: periods 07:00-07:15 (partial), 07:15-07:30, 07:30-07:45 (partial)
+        let start: Int64 = (7 * 60 + 10) * 60_000
+        let t = Ficha.table([ev(2, 1), ev(6, 2, .truck, axle: .c5), ev(21, 3, .truck), ev(3, 4, zone: 2, dir: "↑")],
+                            zones: zones, durationMs: 25 * 60_000, dayOffsetMs: start)
+        XCTAssertEqual(t.periods.map { $0.startOfDayMs / 60_000 }, [420, 435, 450])
+        XCTAssertEqual(t.periods.map { $0.partial }, [true, false, true])
+        XCTAssertEqual(t.movements, ["A ↓", "B ↑"])
+        XCTAssertEqual(t.counts[0][0][.autos], 1)         // 07:12
+        XCTAssertEqual(t.counts[0][1][.c5], 1)            // 07:16
+        XCTAssertEqual(t.counts[0][2][.sinClasificar], 1) // 07:31
+        XCTAssertEqual(t.total(movement: 1, .autos), 1)
+    }
+
+    func testEmptyBoxStillGetsASheet() {
+        let t = Ficha.table([ev(1, 1)], zones: zones, durationMs: 10 * 60_000, dayOffsetMs: 0)
+        XCTAssertEqual(t.movements, ["A ↓", "B"])
+        XCTAssertEqual(t.periods.count, 1)
+    }
+}

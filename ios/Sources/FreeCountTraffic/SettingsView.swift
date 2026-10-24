@@ -61,6 +61,22 @@ struct SettingsView: View {
                     }
                 }
 
+                Section {
+                    Toggle(isOn: $model.fichaMode) {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("E50 Form (by axles)")
+                                Text("Trucks classified as C-2G, C-3-4, C5 or ≥C6 after the session; PDF like the paper form")
+                                    .font(.caption).foregroundColor(.secondary)
+                            }
+                        } icon: { Image(systemName: "tablecells") }
+                    }
+                } header: {
+                    Text("Count Form")
+                } footer: {
+                    Text("Every truck keeps its photo so it can be classified by axles in the results (Classify trucks). Vans are counted as AUTOS/CAMIONETAS.")
+                }
+
                 Section("About") {
                     Label("Everything runs on this device. Nothing is uploaded; videos are never stored.", systemImage: "lock.shield")
                         .font(.footnote)

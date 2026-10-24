@@ -45,7 +45,7 @@ if [ "$done_flag" = 1 ]; then
   sleep 8; xcrun simctl io "$UDID" screenshot screenshots/validate.png 2>/dev/null
 fi
 
-for f in autotest_result.csv autotest_summary.txt autotest_done; do
+for f in autotest_result.csv autotest_summary.txt autotest_done autotest_ficha.pdf; do
   cp "$DATA/Documents/$f" "screenshots/$f" 2>/dev/null || true
 done
 xcrun simctl spawn "$UDID" log show --last 20m --predicate 'process == "FreeCountTraffic"' --style compact > screenshots/app.log 2>/dev/null || true
@@ -62,7 +62,7 @@ fi
 # ---------- RTSP pass: the test video looped through a local RTSP server ----------
 if command -v mediamtx >/dev/null && command -v ffmpeg >/dev/null; then
   xcrun simctl terminate "$UDID" "$BUNDLE" 2>/dev/null || true
-  rm -f "$DATA/Documents/autotest_done" "$DATA/Documents/autotest_result.csv" "$DATA/Documents/autotest_summary.txt"
+  rm -f "$DATA/Documents/autotest_done" "$DATA/Documents/autotest_result.csv" "$DATA/Documents/autotest_summary.txt"     "$DATA/Documents/autotest_ficha.pdf"
   # without a config file MediaMTX accepts no path: allow publishing and reading any path
   printf 'paths:
   all_others:
@@ -85,7 +85,7 @@ if command -v mediamtx >/dev/null && command -v ffmpeg >/dev/null; then
   done
   xcrun simctl io "$UDID" screenshot screenshots/rtsp_final.png 2>/dev/null
   kill "$FF" "$MTX" 2>/dev/null || true
-  for f in autotest_result.csv autotest_summary.txt autotest_done; do
+  for f in autotest_result.csv autotest_summary.txt autotest_done autotest_ficha.pdf; do
     cp "$DATA/Documents/$f" "screenshots/rtsp_$f" 2>/dev/null || true
   done
   echo "===== RTSP AUTOTEST SUMMARY ====="

@@ -92,6 +92,10 @@ struct SessionDetailView: View {
     @State private var validate: ValidateTarget?
     @State private var renaming = false
     @State private var newName = ""
+    @State private var classifyTrucks = false
+    @State private var fichaForm = false
+    /// Ficha PDF made from the form sheet, shared once that sheet has closed.
+    @State private var fichaPdf: URL?
 
     private static func meta(_ r: SessionRecord) -> String {
         var meta = DateFormatter.localizedString(from: r.startedAt, dateStyle: .medium, timeStyle: .short)
@@ -107,6 +111,9 @@ struct SessionDetailView: View {
                     Button { renameStart() } label: { Label("Rename", systemImage: "pencil") }
                     Button { exportCsv() } label: { Label("Export CSV", systemImage: "tablecells") }
                     Button { exportPdf() } label: { Label("Export PDF", systemImage: "doc.richtext") }
+                    if model.fichaMode {
+                        Button { fichaForm = true } label: { Label("Export E50 form (PDF)", systemImage: "tablecells.badge.ellipsis") }
+                    }
                     Button(role: .destructive) { model.deleteSession(id); onBack() } label: { Label("Delete", systemImage: "trash") }
                 } label: { Image(systemName: "ellipsis.circle").font(.system(size: 20)) }
             ))
@@ -125,6 +132,8 @@ struct SessionDetailView: View {
                             Label("Show Graph", systemImage: "chart.bar.xaxis").frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.borderedProminent)
+
+                        if model.fichaMode { fichaCard(r) }
 
                         ResultsPanel(events: r.events, zones: r.zones, onValidate: { validate = ValidateTarget(id: $0) })
 
@@ -152,7 +161,19 @@ struct SessionDetailView: View {
                 }
                 .sheet(isPresented: $showGraph) { ChartsView(record: r) }
                 .sheet(item: $validate) { t in
-                    ValidationView(sessionId: id, zoneId: t.id).environmentObject(model)
+                    ValidationView(sessionId: id, zoneId: t.id, ficha: model.fichaMode).environmentObject(model)
+                }
+                .sheet(isPresented: $classifyTrucks) {
+                    ValidationView(sessionId: id, zoneId: nil, ficha: true, onlyUnclassified: pendingTrucks(r) > 0)
+                        .environmentObject(model)
+                }
+                .sheet(isPresented: $fichaForm, onDismiss: {
+                    if let url = fichaPdf { share = ShareItem(urls: [url]); fichaPdf = nil }
+                }) {
+                    FichaFormView(info: r.ficha ?? model.lastFichaInfo, pending: pendingTrucks(r)) { info in
+                        model.setFichaInfo(id, info)
+                        if let saved = record { fichaPdf = try? FichaPDF.pdf(saved, info) }
+                    }
                 }
             } else {
                 Text("Session not found.").padding(20)
@@ -182,7 +203,35 @@ struct SessionDetailView: View {
     }
 
     private func exportCsv() {
-        if let r = record, let urls = try? Exporter.csv(r) { share = ShareItem(urls: urls) }
+        if let r = record, let urls = try? Exporter.csv(r, ficha: model.fichaMode) { share = ShareItem(urls: urls) }
+    }
+
+    /// Trucks of the session still without their axle class (each vehicle once, whatever boxes it crossed).
+    private func pendingTrucks(_ r: SessionRecord) -> Int {
+        Summary.unique(r.events).filter { FichaCategory($0) == .sinClasificar }.count
+    }
+
+    /// E50 form: trucks to classify by axles, and the PDF laid out like the paper form.
+    private func fichaCard(_ r: SessionRecord) -> some View {
+        let pending = pendingTrucks(r)
+        return VStack(alignment: .leading, spacing: 8) {
+            Label("E50 form (by axles)", systemImage: "tablecells").font(.headline)
+            Text(pending > 0
+                 ? "\(pending) truck(s) still to classify by axles. Until then they are reported as SIN CLASIFICAR."
+                 : "Every truck is classified.")
+                .font(.subheadline)
+                .foregroundColor(pending > 0 ? Theme.orange : .secondary)
+            HStack {
+                Button { classifyTrucks = true } label: { Label("Classify trucks", systemImage: "truck.box") }
+                    .buttonStyle(.bordered)
+                Button { fichaForm = true } label: { Label("Form PDF", systemImage: "doc.richtext") }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.peach.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
+        .foregroundColor(.primary)
     }
 
     private func exportPdf() {

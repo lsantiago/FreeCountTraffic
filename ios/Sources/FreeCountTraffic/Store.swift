@@ -16,8 +16,25 @@ struct SessionRecord: Codable, Identifiable {
     var events: [CountEvent]
     /// Wall-clock time of the first analysed frame (recording date for videos), used to label intervals.
     var clockStart: Date?
+    /// Header of the E50 field form, once filled in for this session.
+    var ficha: FichaInfo? = nil
 
     var startEpochMs: Int64? { clockStart.map { Int64($0.timeIntervalSince1970 * 1000) } }
+
+    /// ms from local midnight to the start of the session (0 when the real start time is unknown).
+    var dayOffsetMs: Int64 {
+        guard let start = clockStart else { return 0 }
+        return Int64(start.timeIntervalSince(Calendar.current.startOfDay(for: start)) * 1000)
+    }
+}
+
+/// Header fields of the E50 field form.
+struct FichaInfo: Codable, Equatable {
+    var title = "CAPACIDAD VIAL VÍA LOJA ZAMORA EJE VIAL E50"
+    var station = ""
+    var weather = ""
+    var observer = ""
+    var coordinator = ""
 }
 
 /// Sessions are kept as one JSON file in the app's Documents folder (counts only, never video), plus the small
@@ -69,15 +86,19 @@ enum Exporter {
         return FileManager.default.temporaryDirectory.appendingPathComponent(safe)
     }
 
-    /// Two files: every counted vehicle, and the 15-minute volume table.
-    static func csv(_ r: SessionRecord) throws -> [URL] {
+    /// Two files: every counted vehicle, and the 15-minute volume table; with the E50 form, a third one with the
+    /// form's table (periods x movements x categories).
+    static func csv(_ r: SessionRecord, ficha: Bool = false) throws -> [URL] {
         let events = tempURL(r.name + ".csv")
         try CsvExporter.build(sessionName: r.name, events: r.events).write(to: events, atomically: true, encoding: .utf8)
         let table = tempURL(r.name + "_15min.csv")
         try CsvExporter.intervals(sessionName: r.name, events: r.events, zones: r.zones, intervalMs: quarterMs,
                                   durationMs: Int64(r.durationMs), startEpochMs: r.startEpochMs)
             .write(to: table, atomically: true, encoding: .utf8)
-        return [events, table]
+        guard ficha else { return [events, table] }
+        let form = tempURL(r.name + "_ficha.csv")
+        try FichaPDF.csv(r).write(to: form, atomically: true, encoding: .utf8)
+        return [events, table, form]
     }
 
     static func pdf(_ r: SessionRecord) throws -> URL {
