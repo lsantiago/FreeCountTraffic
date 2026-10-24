@@ -39,11 +39,16 @@ enum FichaPDF {
         return (hhmm(start), hhmm(start + Int64(r.durationMs)))
     }
 
+    private static func hhmmss(_ msOfDay: Int64) -> String {
+        let s = Int((msOfDay / 1000) % (24 * 3600))
+        return String(format: "%02d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60)
+    }
+
     /// What goes in the OBSERVACIONES column of a period.
     private static func notes(_ counts: [FichaCategory: Int], _ p: FichaPeriod, first: Bool, last: Bool, _ r: SessionRecord) -> String {
         var out: [String] = []
-        if p.partial && first { out.append("Inicia \(hours(r).0)") }
-        if p.partial && last { out.append("Termina \(hours(r).1)") }
+        if p.partial && first { out.append("Inicia \(hhmmss(r.dayOffsetMs))") }
+        if p.partial && last { out.append("Termina \(hhmmss(r.dayOffsetMs + Int64(r.durationMs)))") }
         if let n = counts[.sinClasificar], n > 0 { out.append("\(n) camión(es) sin clasificar") }
         if let n = counts[.bicicletas], n > 0 { out.append("\(n) bicicleta(s)") }
         return out.joined(separator: ". ")
@@ -168,7 +173,7 @@ enum FichaPDF {
         y += 22
 
         // column header
-        let headerH: CGFloat = 50
+        let headerH: CGFloat = 56
         var cx = x
         let cols = widths.map { wd -> CGRect in defer { cx += wd }; return CGRect(x: cx, y: y, width: wd, height: headerH) }
         text("PER", cols[0], size: 10, bold: true, align: .center)
@@ -177,13 +182,13 @@ enum FichaPDF {
             let col = cols[i + 2]
             text(title, CGRect(x: col.minX + 3, y: col.minY + 2, width: col.width - 6, height: 12), size: 7.5, bold: true,
                  align: .left)
-            VehicleIcons.draw(FichaCategory.printed[i], in: CGRect(x: col.minX + 6, y: col.minY + 15, width: col.width - 12, height: 31), c)
+            VehicleIcons.draw(FichaCategory.printed[i], in: CGRect(x: col.minX + 6, y: col.minY + 16, width: col.width - 12, height: 36), c)
         }
         let obs = cols[9]
         c.saveGState()
         c.translateBy(x: obs.midX, y: obs.midY)
         c.rotate(by: -.pi / 2)
-        text("OBSERVACIONES", CGRect(x: -obs.height / 2, y: -obs.width / 2, width: obs.height, height: obs.width), size: 7, bold: true, align: .center)
+        text("OBSERVACIONES", CGRect(x: -obs.height / 2, y: -obs.width / 2, width: obs.height, height: obs.width), size: 6, bold: true, align: .center)
         c.restoreGState()
         for col in cols { stroke(c, col, width: 1) }
         y += headerH
@@ -294,7 +299,7 @@ enum FichaPDF {
         let pending = sums[.sinClasificar] ?? 0
         if pending > 0 {
             text("⚠ Hay \(pending) camión(es) SIN CLASIFICAR: el aforo no está completo. Clasifícalos por ejes en la app "
-                 + "(Resultados → Clasificar camiones) y vuelve a generar la ficha.",
+                 + "(Results → Classify trucks) y vuelve a generar la ficha.",
                  CGRect(x: x, y: y, width: w, height: 30), size: 10, bold: true, color: UIColor(red: 0.7, green: 0.3, blue: 0, alpha: 1),
                  vCenter: false)
             y += 34
