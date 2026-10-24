@@ -181,7 +181,40 @@ struct AnalysisView: View {
                     .buttonStyle(.bordered)
                     .disabled(model.running)
             }
+            if model.videoURL != nil { videoStartTime }
             if model.running, let p = model.progress { ProgressView(value: p) }
+        }
+    }
+
+    /// Real time the video starts at: the 15-minute periods (and the E50 form) follow the clock with it.
+    @ViewBuilder private var videoStartTime: some View {
+        if let start = model.clockStart {
+            DatePicker(selection: Binding(get: { start }, set: { model.setVideoStart($0) }),
+                       displayedComponents: [.date, .hourAndMinute]) {
+                Label("Real start time", systemImage: "clock")
+            }
+            .disabled(model.running)
+            Text(model.videoStartFromFile
+                 ? "Taken from the video's recording date. Check it: videos sent by WhatsApp or edited may carry the time they were exported."
+                 : "Set by you. The 15-minute periods follow this time.")
+                .font(.caption).foregroundColor(.secondary)
+        } else {
+            HStack {
+                Label("No recording time in this video", systemImage: "clock.badge.questionmark")
+                    .font(.subheadline)
+                    .foregroundColor(model.fichaMode ? Theme.orange : .primary)
+                Spacer()
+                Button("Set time") {
+                    // now, to the minute: the user then picks the real date and time
+                    model.setVideoStart(Date(timeIntervalSinceReferenceDate: (Date().timeIntervalSinceReferenceDate / 60).rounded(.down) * 60))
+                }
+                .buttonStyle(.bordered)
+                .disabled(model.running)
+            }
+            Text(model.fichaMode
+                 ? "The E50 form needs the real time the video starts (write it down in the field when you start recording)."
+                 : "Optional: without it the periods start at 00:00.")
+                .font(.caption).foregroundColor(.secondary)
         }
     }
 

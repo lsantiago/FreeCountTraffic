@@ -140,7 +140,11 @@ final class AppModel: ObservableObject {
     private let locator = OneShotLocation()
     private var autotestStarted = false
     private var nameEdited = false
-    private var clockStart: Date?
+    /// Real time of the first analysed frame: the start of the session for live sources; for a video, its recording
+    /// date (from the file) or the time the user sets, so the 15-minute periods follow the clock.
+    @Published private(set) var clockStart: Date?
+    /// The video's start time comes from the file's recording date (not typed by the user).
+    @Published private(set) var videoStartFromFile = false
     private let geocoder = CLGeocoder()
 
     init() {
@@ -353,10 +357,12 @@ final class AppModel: ObservableObject {
         message = nil
         if !nameEdited { sessionName = displayName ?? url.deletingPathExtension().lastPathComponent }
         clockStart = nil
+        videoStartFromFile = false
         Task {
             // recording date of the video labels the intervals with real clock times
             if let date = try? await AVURLAsset(url: url).load(.creationDate)?.load(.dateValue) {
                 clockStart = date
+                videoStartFromFile = true
                 if !nameEdited && sessionName == "Video" { sessionName = "Video " + Self.nameFormatter.string(from: date) }
             }
             if let frame = await VideoSource.firstFrame(url) {
@@ -367,12 +373,24 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Real start time of the video, typed by the user (videos sent by WhatsApp or edited lose their recording date,
+    /// or carry the export time).
+    func setVideoStart(_ date: Date?) {
+        guard !running, source == .video else { return }
+        clockStart = date
+        videoStartFromFile = false
+    }
+
     // MARK: sessions
 
     func start() {
         guard !running, modelReady else { return }
         if source == .video && videoURL == nil { message = "Choose a video first."; return }
         if source == .rtsp && snapshot == nil { message = "Connect to a stream first."; return }
+        if source == .video && fichaMode && clockStart == nil {
+            message = "Set the real start time of the video first: the E50 form needs it for its periods."
+            return
+        }
         engine.reset()
         startedAt = Date()
         if source != .video {
