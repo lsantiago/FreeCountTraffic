@@ -59,6 +59,16 @@ struct SettingsView: View {
                     Toggle(isOn: $model.soundOn) {
                         Label("Sound Effects", systemImage: "speaker.wave.2")
                     }
+
+                    Toggle(isOn: $model.restScreen) {
+                        Label {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Rest Screen While Counting")
+                                Text("After 30 s without touching, the screen dims and shows only the counts (tap to wake). Less heat and battery; counting is not affected.")
+                                    .font(.caption).foregroundColor(.secondary)
+                            }
+                        } icon: { Image(systemName: "moon") }
+                    }
                 }
 
                 Section {

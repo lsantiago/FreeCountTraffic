@@ -5,7 +5,29 @@ import ImageIO
 
 let maxFrameSide: CGFloat = 640
 
-private let sharedCIContext = CIContext()
+let sharedCIContext = CIContext()
+
+/// A frame to analyse: the source's own pixel buffer, read by the detector with no conversion. It becomes a picture
+/// only when it is shown or a counted vehicle's photo is cut from it.
+struct FrameInput: @unchecked Sendable {
+    let buffer: CVPixelBuffer
+    /// How to turn the buffer upright (videos recorded with the phone upright are stored sideways).
+    let orientation: CGImagePropertyOrientation
+    /// Timestamp in ms on a monotonic clock (video position or camera presentation time).
+    let tMs: Int64
+
+    /// The upright frame for Core Image (origin at the bottom left).
+    var image: CIImage { CIImage(cvPixelBuffer: buffer).oriented(orientation) }
+
+    /// Width / height as shown.
+    var aspect: Float {
+        let e = image.extent
+        return Float(e.width / max(e.height, 1))
+    }
+
+    /// Downscaled picture for the screen.
+    func displayImage() -> CGImage? { makeFrame(image) }
+}
 
 /// Downscales so the longest side is `maxFrameSide` and renders to a CGImage.
 func makeFrame(_ input: CIImage) -> CGImage? {
@@ -18,14 +40,14 @@ func makeFrame(_ input: CIImage) -> CGImage? {
     return sharedCIContext.createCGImage(image, from: image.extent)
 }
 
-/// Back camera -> frames (downscaled so the longest side is 640 px). Runs on its own queue.
+/// Back camera -> frames (the camera's own buffers). Runs on its own queue.
 final class CameraSource: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     private let session = AVCaptureSession()
     private let queue = DispatchQueue(label: "freecount.camera")
-    private var onFrame: (@Sendable (CGImage, Int64) -> Void)?
+    private var onFrame: (@Sendable (FrameInput) -> Void)?
     private var running = false
 
-    func start(onFrame: @escaping @Sendable (CGImage, Int64) -> Void, onError: @escaping @Sendable (String) -> Void) {
+    func start(onFrame: @escaping @Sendable (FrameInput) -> Void, onError: @escaping @Sendable (String) -> Void) {
         self.onFrame = onFrame
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
@@ -76,10 +98,9 @@ final class CameraSource: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer),
-              let cg = makeFrame(CIImage(cvPixelBuffer: buffer)) else { return }
+        guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let ms = Int64(CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer)) * 1000)
-        onFrame?(cg, ms)
+        onFrame?(FrameInput(buffer: buffer, orientation: .up, tMs: ms))
     }
 }
 
@@ -110,7 +131,7 @@ enum VideoSource {
     /// If iOS interrupts the reader (app sent to background, screen locked), reading resumes where it stopped.
     static func run(
         url: URL,
-        process: @Sendable (CGImage, Int64) -> Void,
+        process: @Sendable (FrameInput) -> Void,
         onProgress: @Sendable (Double) -> Void
     ) async throws {
         let asset = AVURLAsset(url: url)
@@ -159,9 +180,8 @@ enum VideoSource {
                     try await Task.sleep(nanoseconds: UInt64(videoElapsed - wallElapsed) * 1_000_000)
                 }
 
-                guard let buffer = CMSampleBufferGetImageBuffer(sample),
-                      let cg = makeFrame(CIImage(cvPixelBuffer: buffer).oriented(orient)) else { continue }
-                process(cg, ms)
+                guard let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
+                process(FrameInput(buffer: buffer, orientation: orient, tMs: ms))
                 onProgress(min(Double(ms) / Double(totalMs), 1))
                 lastMs = ms
             }

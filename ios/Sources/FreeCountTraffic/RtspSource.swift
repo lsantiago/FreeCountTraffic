@@ -12,7 +12,7 @@ final class RtspSource: @unchecked Sendable {
     private let lock = NSLock()
     private var generation = 0
 
-    func start(url: String, onFrame: @escaping @Sendable (CGImage, Int64) -> Void, onStatus: @escaping @Sendable (String?) -> Void) {
+    func start(url: String, onFrame: @escaping @Sendable (FrameInput) -> Void, onStatus: @escaping @Sendable (String?) -> Void) {
         lock.lock()
         generation += 1
         let gen = generation
@@ -56,7 +56,7 @@ private final class RtspWorker {
     private var prevTs: UInt32?
     private var prevWallMs: Int64 = 0
 
-    init(url: String, alive: @escaping @Sendable () -> Bool, onFrame: @escaping @Sendable (CGImage, Int64) -> Void, onStatus: @escaping @Sendable (String?) -> Void) {
+    init(url: String, alive: @escaping @Sendable () -> Bool, onFrame: @escaping @Sendable (FrameInput) -> Void, onStatus: @escaping @Sendable (String?) -> Void) {
         self.url = url
         self.alive = alive
         self.onStatus = onStatus
@@ -158,11 +158,11 @@ private final class LatestFrame: @unchecked Sendable {
     private let lock = NSLock()
     private let queue = DispatchQueue(label: "freecount.rtsp.frames")
     private let alive: @Sendable () -> Bool
-    private let onFrame: @Sendable (CGImage, Int64) -> Void
+    private let onFrame: @Sendable (FrameInput) -> Void
     private var pending: (CVPixelBuffer, Int64)?
     private var busy = false
 
-    init(alive: @escaping @Sendable () -> Bool, onFrame: @escaping @Sendable (CGImage, Int64) -> Void) {
+    init(alive: @escaping @Sendable () -> Bool, onFrame: @escaping @Sendable (FrameInput) -> Void) {
         self.alive = alive
         self.onFrame = onFrame
     }
@@ -179,7 +179,7 @@ private final class LatestFrame: @unchecked Sendable {
                 guard let next = pending else { busy = false; lock.unlock(); return }
                 pending = nil
                 lock.unlock()
-                if alive(), let cg = makeFrame(CIImage(cvPixelBuffer: next.0)) { onFrame(cg, next.1) }
+                if alive() { onFrame(FrameInput(buffer: next.0, orientation: .up, tMs: next.1)) }
             }
         }
     }

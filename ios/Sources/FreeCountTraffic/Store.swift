@@ -18,6 +18,8 @@ struct SessionRecord: Codable, Identifiable {
     var clockStart: Date?
     /// Header of the E50 field form, once filled in for this session.
     var ficha: FichaInfo? = nil
+    /// Device log while counting (temperature, frame rate, detector time, battery).
+    var device: [DeviceSample]? = nil
 
     var startEpochMs: Int64? { clockStart.map { Int64($0.timeIntervalSince1970 * 1000) } }
 
@@ -33,6 +35,50 @@ struct SessionRecord: Codable, Identifiable {
     var dayOffsetMs: Int64 {
         guard let start = clockStart else { return 0 }
         return Int64(start.timeIntervalSince(Calendar.current.startOfDay(for: start)) * 1000)
+    }
+}
+
+/// One line of a session's device log.
+struct DeviceSample: Codable, Equatable {
+    var tSec: Int
+    /// ProcessInfo.ThermalState: 0 nominal, 1 fair, 2 serious, 3 critical.
+    var thermal: Int
+    /// Frames analysed per second and detector time per frame (ms).
+    var fps: Double
+    var detectMs: Double
+    /// 0...1
+    var battery: Float?
+    var charging: Bool?
+    /// The screen was resting (dimmed, counts only).
+    var resting: Bool
+}
+
+extension SessionRecord {
+    static let thermalNames = ["normal", "warm", "hot", "critical"]
+
+    /// "Temperature: warm from 12 min · 18 FPS · detector 35 ms · battery 85 → 71 %", nil without a log.
+    var deviceSummary: String? {
+        guard let d = device, !d.isEmpty else { return nil }
+        let worst = d.map { $0.thermal }.max() ?? 0
+        var parts = ["Temperature: " + Self.thermalNames[min(max(worst, 0), 3)]]
+        if worst > 0, let first = d.first(where: { $0.thermal == worst }) { parts[0] += " from \(first.tSec / 60) min" }
+        let fps = d.map { $0.fps }.filter { $0 > 0 }
+        if !fps.isEmpty { parts.append(String(format: "%.0f FPS", fps.reduce(0, +) / Double(fps.count))) }
+        let ms = d.map { $0.detectMs }.filter { $0 > 0 }
+        if !ms.isEmpty { parts.append(String(format: "detector %.0f ms", ms.reduce(0, +) / Double(ms.count))) }
+        if let a = d.first(where: { $0.battery != nil })?.battery, let b = d.last(where: { $0.battery != nil })?.battery {
+            parts.append("battery \(Int((a * 100).rounded())) → \(Int((b * 100).rounded())) %" + (d.contains { $0.charging == true } ? " (charging)" : ""))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    var deviceCsv: String {
+        var out = "time_min,temperature,fps,detector_ms,battery_pct,charging,screen_resting\n"
+        for s in device ?? [] {
+            out += String(format: "%.1f", Double(s.tSec) / 60) + ",\(Self.thermalNames[min(max(s.thermal, 0), 3)]),\(s.fps),\(s.detectMs),"
+            out += (s.battery.map { String(Int(($0 * 100).rounded())) } ?? "") + ",\(s.charging.map { $0 ? "yes" : "no" } ?? ""),\(s.resting ? "yes" : "no")\n"
+        }
+        return out
     }
 }
 
@@ -104,10 +150,18 @@ enum Exporter {
         try CsvExporter.intervals(sessionName: r.name, events: r.events, zones: r.zones, intervalMs: quarterMs,
                                   durationMs: Int64(r.durationMs), startEpochMs: r.startEpochMs)
             .write(to: table, atomically: true, encoding: .utf8)
-        guard ficha else { return [events, table] }
-        let form = tempURL(r.name + "_ficha.csv")
-        try FichaPDF.csv(r).write(to: form, atomically: true, encoding: .utf8)
-        return [events, table, form]
+        var urls = [events, table]
+        if ficha {
+            let form = tempURL(r.name + "_ficha.csv")
+            try FichaPDF.csv(r).write(to: form, atomically: true, encoding: .utf8)
+            urls.append(form)
+        }
+        if r.device?.isEmpty == false {
+            let device = tempURL(r.name + "_device.csv")
+            try r.deviceCsv.write(to: device, atomically: true, encoding: .utf8)
+            urls.append(device)
+        }
+        return urls
     }
 
     static func pdf(_ r: SessionRecord) throws -> URL {

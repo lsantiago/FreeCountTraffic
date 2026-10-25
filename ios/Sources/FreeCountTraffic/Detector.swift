@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreImage
 import CoreML
 import Foundation
 import TrafficCore
@@ -84,16 +85,36 @@ final class VehicleDetector {
         return nil
     }
 
-    func detect(_ image: CGImage) -> [Detection] {
-        let handler = VNImageRequestHandler(cgImage: image, options: [:])
+    /// Detects on the source's own pixel buffer (Vision scales it to the model's input, with no extra conversion).
+    /// - Parameter area: part of the upright frame to analyse, normalized with origin top-left (nil = whole frame).
+    ///   It is cut from the full-resolution frame; the boxes are returned in whole-frame coordinates.
+    func detect(_ frame: FrameInput, area: RectN?) -> [Detection] {
+        var handler = VNImageRequestHandler(cvPixelBuffer: frame.buffer, orientation: frame.orientation, options: [:])
+        var crop = RectN(left: 0, top: 0, right: 1, bottom: 1)
+        if let area, area.width < 0.98 || area.height < 0.98 {
+            let image = frame.image
+            let e = image.extent
+            // Core Image's origin is at the bottom left
+            let rect = CGRect(x: e.minX + CGFloat(area.left) * e.width, y: e.minY + (1 - CGFloat(area.bottom)) * e.height,
+                              width: CGFloat(area.width) * e.width, height: CGFloat(area.height) * e.height)
+                .intersection(e).integral
+            if rect.width >= 32, rect.height >= 32 {
+                let cut = image.cropped(to: rect).transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
+                handler = VNImageRequestHandler(ciImage: cut, options: [:])
+                crop = RectN(left: Float((rect.minX - e.minX) / e.width), top: Float(1 - (rect.maxY - e.minY) / e.height),
+                             right: Float((rect.maxX - e.minX) / e.width), bottom: Float(1 - (rect.minY - e.minY) / e.height))
+            }
+        }
         do { try handler.perform([request]) } catch { return [] }
         let observations = (request.results as? [VNRecognizedObjectObservation]) ?? []
         return observations.compactMap { o in
             guard let top = o.labels.first, top.confidence >= confidence,
                   let cls = VehicleClass.fromCoco(top.identifier) else { return nil }
-            let b = o.boundingBox // normalized, origin bottom-left
+            let b = o.boundingBox // normalized to the analysed image, origin bottom-left
+            let l = Float(b.minX), t = Float(1 - b.maxY), r = Float(b.maxX), btm = Float(1 - b.minY)
             return Detection(
-                box: RectN(left: Float(b.minX), top: Float(1 - b.maxY), right: Float(b.maxX), bottom: Float(1 - b.minY)),
+                box: RectN(left: crop.left + l * crop.width, top: crop.top + t * crop.height,
+                           right: crop.left + r * crop.width, bottom: crop.top + btm * crop.height),
                 cls: cls,
                 score: top.confidence
             )

@@ -38,7 +38,7 @@ struct AnalysisView: View {
     @State private var showSettings = false
     @State private var lastEventCount = 0
 
-    private var events: [CountEvent] { model.snapshot?.events ?? [] }
+    private var events: [CountEvent] { model.liveEvents }
 
     var body: some View {
         GeometryReader { geo in
@@ -64,6 +64,10 @@ struct AnalysisView: View {
                 }
             }
         }
+        // any tap wakes the screen from rest and restarts its countdown
+        .simultaneousGesture(TapGesture().onEnded { model.touched() })
+        .onChange(of: model.zones) { _ in model.touched() }
+        .overlay { if model.resting { RestView(source: source).environmentObject(model) } }
         .onAppear { model.enterAnalysis(source) }
         .sheet(isPresented: $showSettings) { SettingsView().environmentObject(model) }
         .onChange(of: events.count) { count in
@@ -96,26 +100,10 @@ struct AnalysisView: View {
         }
     }
 
-    private var frameAspect: CGFloat {
-        guard let f = model.snapshot?.frame, f.height > 0 else { return 16.0 / 9.0 }
-        return CGFloat(f.width) / CGFloat(f.height)
-    }
+    private var frameAspect: CGFloat { model.frameAspect ?? 16.0 / 9.0 }
 
     private func frameView(fillWidth: Bool) -> some View {
-        FrameView(
-            frame: model.snapshot?.frame,
-            tracks: model.snapshot?.tracks ?? [],
-            trails: model.snapshot?.trails ?? [:],
-            fps: model.running && model.showFps ? model.snapshot?.fps : nil,
-            zones: model.zones,
-            counts: Dictionary(grouping: events, by: { $0.zoneId }).mapValues { $0.count },
-            selectedId: model.selectedZoneId,
-            studyArea: model.studyArea,
-            onSelect: { model.selectedZoneId = $0 },
-            onZoneChange: { model.setRect($0, $1, angle: $2) },
-            onStudyAreaChange: { model.setStudyArea($0) },
-            fillWidth: fillWidth
-        )
+        LivePicture(live: model.live, fillWidth: fillWidth)
     }
 
     private var controlsScroll: some View {
@@ -237,7 +225,7 @@ struct AnalysisView: View {
         switch source {
         case .camera: return true
         case .video: return model.videoURL != nil
-        case .rtsp: return model.rtspActive != nil && model.snapshot != nil
+        case .rtsp: return model.rtspActive != nil && model.frameAspect != nil
         }
     }
 
@@ -348,4 +336,67 @@ struct AnalysisView: View {
         }
     }
 
+}
+
+/// The picture with its boxes: the only part of the analysis screen redrawn for every frame.
+struct LivePicture: View {
+    @EnvironmentObject var model: AppModel
+    @ObservedObject var live: LiveFrame
+    let fillWidth: Bool
+
+    var body: some View {
+        let s = live.snapshot
+        FrameView(
+            frame: s?.frame,
+            tracks: s?.tracks ?? [],
+            trails: s?.trails ?? [:],
+            fps: model.running && model.showFps ? s?.fps : nil,
+            zones: model.zones,
+            counts: Dictionary(grouping: model.liveEvents, by: { $0.zoneId }).mapValues { $0.count },
+            selectedId: model.selectedZoneId,
+            studyArea: model.studyArea,
+            onSelect: { model.selectedZoneId = $0 },
+            onZoneChange: { model.setRect($0, $1, angle: $2) },
+            onStudyAreaChange: { model.setStudyArea($0) },
+            fillWidth: fillWidth
+        )
+    }
+}
+
+/// Rest screen while counting: dark and dimmed, with only the counts (frames are still analysed). A tap wakes it.
+struct RestView: View {
+    @EnvironmentObject var model: AppModel
+    let source: SourceKind
+
+    var body: some View {
+        let unique = Summary.unique(model.liveEvents)
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VStack(spacing: 14) {
+                Label("Counting · \(clock(model.elapsedMs))", systemImage: "moon.fill")
+                    .font(.headline)
+                    .foregroundColor(Theme.orange)
+                Text("\(unique.count)").font(.system(size: 76, weight: .bold).monospacedDigit())
+                Text("vehicles").font(.subheadline).foregroundColor(.gray)
+                VStack(spacing: 6) {
+                    ForEach(Summary.of(model.liveEvents, zones: model.zones), id: \.zoneId) { s in
+                        HStack {
+                            Text(s.zoneName).lineLimit(1)
+                            Spacer()
+                            Text("\(s.total)").monospacedDigit().fontWeight(.semibold)
+                        }
+                    }
+                }
+                .frame(maxWidth: 280)
+                if source == .video, let p = model.progress { ProgressView(value: p).frame(maxWidth: 280).tint(Theme.orange) }
+                Text("Screen resting to save heat and battery.\nTap to show the picture.")
+                    .font(.footnote).multilineTextAlignment(.center).foregroundColor(.gray)
+                    .padding(.top, 8)
+            }
+            .foregroundColor(.white)
+            .padding(32)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { model.touched() }
+    }
 }

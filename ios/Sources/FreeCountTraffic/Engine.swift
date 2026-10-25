@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreImage
 import Foundation
 import ImageIO
 import TrafficCore
@@ -13,10 +14,24 @@ struct EngineSnapshot {
     var trails: [Int: [CGPoint]] = [:]
 }
 
+/// What the engine found in one frame; the caller adds the picture only when the frame is shown.
+struct EngineResult {
+    var tracks: [Track]
+    var events: [CountEvent]
+    var fps: Double
+    var trails: [Int: [CGPoint]]
+
+    func snapshot(_ frame: CGImage) -> EngineSnapshot {
+        EngineSnapshot(frame: frame, tracks: tracks, events: events, fps: fps, trails: trails)
+    }
+}
+
 /// Detector -> tracker -> zone counter pipeline shared by every frame source. Thread-safe.
 final class AnalysisEngine: @unchecked Sendable {
     /// Like the reference app, only the first 500 vehicle images of a session are kept.
     static let maxThumbnails = 500
+    /// Longest side of a vehicle image: large enough to see the axles of a truck.
+    private static let thumbnailSide: CGFloat = 320
 
     private let lock = NSLock()
     private var detector: VehicleDetector?
@@ -29,13 +44,15 @@ final class AnalysisEngine: @unchecked Sendable {
     /// E50 form: every truck keeps its image (beyond the 500 limit and with images off), since a person classifies
     /// trucks by axles from it.
     private var keepTruckImages = false
-    /// Area of study: when set, only this part of the frame is analysed (at full detector resolution, so distant
-    /// vehicles are found more easily).
+    /// Area of study: when set, only this part of the frame is analysed (cut from the full-resolution frame, so
+    /// distant vehicles are found more easily).
     private var studyArea: RectN?
     private var startMs: Int64?
     private var lastMs: Int64 = 0
     private var lastFrameTime: TimeInterval = 0
     private var fpsEma: Double = 0
+    /// Time the detector takes per frame (ms, smoothed), for the session's device log.
+    private var detectMsEma: Double = 0
     private var trailMap: [Int: [CGPoint]] = [:]
     private var thumbs: [Int: Data] = [:]
     private let maxTrailPoints = 30
@@ -62,23 +79,33 @@ final class AnalysisEngine: @unchecked Sendable {
         }
     }
 
+    /// Frames analysed per second and detector time per frame (ms), both smoothed.
+    var stats: (fps: Double, detectMs: Double) {
+        lock.lock(); defer { lock.unlock() }
+        return (fpsEma, detectMsEma)
+    }
+
     /// - Parameters:
-    ///   - tMs: frame timestamp in ms on a monotonic clock (video position or camera presentation time).
-    ///   - counting: when false the frame is only returned for display.
-    func process(_ frame: CGImage, tMs rawMs: Int64, counting: Bool) -> EngineSnapshot {
+    ///   - frame: the source's pixel buffer with its timestamp in ms on a monotonic clock (video position or camera
+    ///     presentation time). The detector reads it directly, with no conversion.
+    ///   - counting: when false nothing is analysed (the frame is only shown).
+    func process(_ frame: FrameInput, counting: Bool) -> EngineResult {
         lock.lock(); defer { lock.unlock() }
         guard counting, let detector else {
-            return EngineSnapshot(frame: frame, tracks: [], events: counter.events, fps: 0)
+            return EngineResult(tracks: [], events: counter.events, fps: 0, trails: [:])
         }
         // event times are relative to the start of the session (camera timestamps are device uptime)
-        if startMs == nil { startMs = rawMs }
-        let tMs = rawMs - (startMs ?? rawMs)
+        if startMs == nil { startMs = frame.tMs }
+        let tMs = frame.tMs - (startMs ?? frame.tMs)
         lastMs = tMs
 
-        let detections = Self.detect(detector, frame, in: studyArea).filter { enabled.contains($0.cls) }
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        let detections = detector.detect(frame, area: studyArea).filter { enabled.contains($0.cls) }
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
+        detectMsEma = detectMsEma == 0 ? ms : 0.9 * detectMsEma + 0.1 * ms
+
         let result = tracker.update(detections, tMs: tMs)
-        let aspect = Float(frame.width) / Float(frame.height)
-        let produced = counter.update(zones: zones, frameAspect: aspect, active: result.active, removed: result.removed, tMs: tMs)
+        let produced = counter.update(zones: zones, frameAspect: frame.aspect, active: result.active, removed: result.removed, tMs: tMs)
 
         for e in produced where thumbs[e.trackId] == nil {
             guard (saveImages && thumbs.count < Self.maxThumbnails) || (keepTruckImages && e.cls == .truck) else { continue }
@@ -105,7 +132,7 @@ final class AnalysisEngine: @unchecked Sendable {
         // only vehicles detected in this frame are drawn: a track the tracker keeps alive for a moment after the
         // vehicle is gone (to bridge missed detections) must not leave its box behind on screen
         let visible = result.active.filter { $0.lastSeenMs == tMs }
-        return EngineSnapshot(frame: frame, tracks: visible, events: counter.events, fps: fpsEma, trails: trailMap)
+        return EngineResult(tracks: visible, events: counter.events, fps: fpsEma, trails: trailMap)
     }
 
     func reset() {
@@ -116,6 +143,7 @@ final class AnalysisEngine: @unchecked Sendable {
         lastMs = 0
         lastFrameTime = 0
         fpsEma = 0
+        detectMsEma = 0
         trailMap.removeAll()
         thumbs.removeAll()
     }
@@ -128,42 +156,25 @@ final class AnalysisEngine: @unchecked Sendable {
         return (counter.events, thumbs, lastMs)
     }
 
-    /// Runs the detector on the study area only and maps the boxes back to the whole frame.
-    private static func detect(_ detector: VehicleDetector, _ frame: CGImage, in area: RectN?) -> [Detection] {
-        let w = CGFloat(frame.width), h = CGFloat(frame.height)
-        guard let area, area.width < 0.98 || area.height < 0.98 else { return detector.detect(frame) }
-        let rect = CGRect(x: CGFloat(area.left) * w, y: CGFloat(area.top) * h,
-                          width: CGFloat(area.width) * w, height: CGFloat(area.height) * h)
-            .intersection(CGRect(x: 0, y: 0, width: w, height: h)).integral
-        guard rect.width >= 32, rect.height >= 32, let crop = frame.cropping(to: rect) else { return detector.detect(frame) }
-        let l = Float(rect.minX / w), t = Float(rect.minY / h), sw = Float(rect.width / w), sh = Float(rect.height / h)
-        return detector.detect(crop).map { d in
-            var d = d
-            d.box = RectN(left: l + d.box.left * sw, top: t + d.box.top * sh, right: l + d.box.right * sw, bottom: t + d.box.bottom * sh)
-            return d
-        }
-    }
-
-    /// Crop around the vehicle (with some margin), at most 200 px, as JPEG.
-    private static func thumbnail(_ frame: CGImage, _ box: RectN) -> Data? {
-        let w = CGFloat(frame.width), h = CGFloat(frame.height)
+    /// Crop around the vehicle (with some margin) from the full-resolution frame, at most `thumbnailSide` px, as JPEG.
+    private static func thumbnail(_ frame: FrameInput, _ box: RectN) -> Data? {
+        let image = frame.image
+        let e = image.extent
+        let w = e.width, h = e.height
         let padX = CGFloat(box.width) * 0.15 * w, padY = CGFloat(box.height) * 0.15 * h
-        let rect = CGRect(x: CGFloat(box.left) * w - padX, y: CGFloat(box.top) * h - padY,
+        // Core Image's origin is at the bottom left
+        let rect = CGRect(x: e.minX + CGFloat(box.left) * w - padX, y: e.minY + (1 - CGFloat(box.bottom)) * h - padY,
                           width: CGFloat(box.width) * w + 2 * padX, height: CGFloat(box.height) * h + 2 * padY)
-            .intersection(CGRect(x: 0, y: 0, width: w, height: h)).integral
-        guard rect.width >= 4, rect.height >= 4, let crop = frame.cropping(to: rect) else { return nil }
+            .intersection(e).integral
+        guard rect.width >= 4, rect.height >= 4 else { return nil }
+        let scale = min(1, thumbnailSide / max(rect.width, rect.height))
+        let crop = image.cropped(to: rect)
+            .transformed(by: CGAffineTransform(translationX: -rect.minX, y: -rect.minY))
+            .transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        guard let cg = sharedCIContext.createCGImage(crop, from: crop.extent) else { return nil }
         let data = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(data as CFMutableData, UTType.jpeg.identifier as CFString, 1, nil) else { return nil }
-        let scale = min(1, 200 / max(rect.width, rect.height))
-        var image = crop
-        if scale < 1, let ctx = CGContext(data: nil, width: Int(rect.width * scale), height: Int(rect.height * scale),
-                                          bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
-                                          bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) {
-            ctx.interpolationQuality = .medium
-            ctx.draw(crop, in: CGRect(x: 0, y: 0, width: ctx.width, height: ctx.height))
-            image = ctx.makeImage() ?? crop
-        }
-        CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: 0.75] as CFDictionary)
+        CGImageDestinationAddImage(dest, cg, [kCGImageDestinationLossyCompressionQuality: 0.75] as CFDictionary)
         return CGImageDestinationFinalize(dest) ? data as Data : nil
     }
 }

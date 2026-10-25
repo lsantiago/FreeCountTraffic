@@ -11,6 +11,13 @@ enum SourceKind: String, Hashable {
     case camera, video, rtsp
 }
 
+/// Latest frame with its boxes. Only the picture observes it, so the rest of the analysis screen is not redrawn for
+/// every frame (that redrawing alone kept the phone busy).
+@MainActor
+final class LiveFrame: ObservableObject {
+    @Published var snapshot: EngineSnapshot? = nil
+}
+
 /// Small lock-protected flag read from camera/video threads.
 final class Flag: @unchecked Sendable {
     private let lock = NSLock()
@@ -120,7 +127,41 @@ final class AppModel: ObservableObject {
     /// Stream being played (nil = not connected).
     @Published var rtspActive: String?
     @Published var modelReady = false
-    @Published var snapshot: EngineSnapshot?
+    /// Latest frame with its boxes (see `LiveFrame`).
+    let live = LiveFrame()
+    /// Vehicles counted so far on the analysis screen: changes only when a vehicle is counted.
+    @Published private(set) var liveEvents: [CountEvent] = []
+    /// Width / height of the picture on screen (nil = no picture yet).
+    @Published private(set) var frameAspect: CGFloat?
+
+    var snapshot: EngineSnapshot? {
+        get { live.snapshot }
+        set {
+            live.snapshot = newValue
+            setLiveEvents(newValue?.events ?? [])
+            let aspect = newValue.map { CGFloat($0.frame.width) / CGFloat(max($0.frame.height, 1)) }
+            if aspect != frameAspect { frameAspect = aspect }
+        }
+    }
+
+    private func setLiveEvents(_ events: [CountEvent]) {
+        if events != liveEvents { liveEvents = events }
+    }
+
+    /// Rest screen (Settings): after `restAfter` seconds without touching the screen while counting, it dims and only
+    /// the counts are shown; frames are still analysed but no longer turned into pictures.
+    @Published var restScreen: Bool = UserDefaults.standard.object(forKey: "restScreen") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(restScreen, forKey: "restScreen"); if !restScreen { setResting(false) } }
+    }
+    @Published private(set) var resting = false
+    private let restAfter: TimeInterval = 30
+    private let restingFlag = Flag()
+    private let restGate = UiGate(minGap: 1)
+    private var lastTouch = Date()
+    private var savedBrightness: CGFloat?
+    /// Device log of the session in progress (temperature, frame rate, detector time, battery).
+    private var deviceLog: [DeviceSample] = []
+    private var lastDeviceSample = Date.distantPast
     @Published var elapsedMs: Int64 = 0
     @Published var sessions: [SessionRecord] = []
 
@@ -148,6 +189,9 @@ final class AppModel: ObservableObject {
     private let geocoder = CLGeocoder()
 
     init() {
+        NotificationCenter.default.addObserver(forName: ProcessInfo.thermalStateDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.sampleDevice() }
+        }
         sessions = store.load()
         selectedZoneId = zones.first?.id
         nextZoneId = (zones.map { $0.id }.max() ?? 0) + 1
@@ -266,6 +310,7 @@ final class AppModel: ObservableObject {
     }
 
     func leaveAnalysis() {
+        setResting(false)
         if running { stop() }
         stopCamera()
         stopRtsp()
@@ -311,16 +356,71 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Live frames (camera, RTSP): shown at once and analysed while counting.
-    private func liveFrameHandler() -> @Sendable (CGImage, Int64) -> Void {
+    /// Frames of every source: analysed while counting, shown at most 30 times a second and only turned into a
+    /// picture when shown. While the screen rests, only the counts are updated (once a second).
+    private func frameHandler(counting: @escaping @Sendable () -> Bool) -> @Sendable (FrameInput) -> Void {
         let engine = engine
-        let flag = countingFlag
         let gate = frameGate
-        return { [weak self] frame, t in
-            let snap = engine.process(frame, tMs: t, counting: flag.value)
+        let restGate = restGate
+        let resting = restingFlag
+        return { [weak self] frame in
+            let result = engine.process(frame, counting: counting())
+            if resting.value {
+                guard restGate.tryEnter() else { return }
+                Task { @MainActor in self?.setLiveEvents(result.events); restGate.leave() }
+                return
+            }
             guard gate.tryEnter() else { return }
-            Task { @MainActor in self?.snapshot = snap; gate.leave() }
+            guard let picture = frame.displayImage() else { gate.leave(); return }
+            Task { @MainActor in self?.snapshot = result.snapshot(picture); gate.leave() }
         }
+    }
+
+    /// Live frames (camera, RTSP): shown at once and analysed while counting.
+    private func liveFrameHandler() -> @Sendable (FrameInput) -> Void {
+        let flag = countingFlag
+        return frameHandler(counting: { flag.value })
+    }
+
+    /// Any touch on the analysis screen: wakes it from rest and restarts the countdown to rest.
+    func touched() {
+        lastTouch = Date()
+        setResting(false)
+    }
+
+    private func setResting(_ on: Bool) {
+        guard on != resting, !on || running else { return }
+        resting = on
+        restingFlag.value = on
+        #if canImport(UIKit)
+        if on {
+            savedBrightness = UIScreen.main.brightness
+            UIScreen.main.brightness = 0.05
+        } else if let b = savedBrightness {
+            UIScreen.main.brightness = b
+            savedBrightness = nil
+        }
+        #endif
+    }
+
+    /// One line of the session's device log; every 30 s while counting and whenever iOS reports a temperature change.
+    private func sampleDevice() {
+        guard running else { return }
+        lastDeviceSample = Date()
+        let stats = engine.stats
+        #if canImport(UIKit)
+        let level = UIDevice.current.batteryLevel
+        let state = UIDevice.current.batteryState
+        let battery: Float? = level >= 0 ? level : nil
+        let charging: Bool? = state == .unknown ? nil : (state == .charging || state == .full)
+        #else
+        let battery: Float? = nil
+        let charging: Bool? = nil
+        #endif
+        deviceLog.append(DeviceSample(tSec: Int(Date().timeIntervalSince(startedAt)),
+                                      thermal: ProcessInfo.processInfo.thermalState.rawValue,
+                                      fps: (stats.fps * 10).rounded() / 10, detectMs: (stats.detectMs * 10).rounded() / 10,
+                                      battery: battery, charging: charging, resting: resting))
     }
 
     private func startCamera() {
@@ -403,25 +503,31 @@ final class AppModel: ObservableObject {
         countingFlag.value = true
         setScreenAlwaysOn(true)
         fetchLocation()
+        lastTouch = Date()
+        deviceLog = []
+        #if canImport(UIKit)
+        UIDevice.current.isBatteryMonitoringEnabled = true
+        #endif
+        sampleDevice()
         timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }
                 self.elapsedMs = Int64(Date().timeIntervalSince(self.startedAt) * 1000)
+                if Date().timeIntervalSince(self.lastDeviceSample) >= 30 { self.sampleDevice() }
+                if self.restScreen && !self.resting && !self.autotestRequested
+                    && Date().timeIntervalSince(self.lastTouch) > self.restAfter {
+                    self.setResting(true)
+                }
             }
         }
         if source == .video, let url = videoURL {
-            let engine = engine
-            let gate = frameGate
+            let process = frameHandler(counting: { true })
             let pGate = progressGate
             videoTask = Task.detached { [weak self] in
                 do {
                     try await VideoSource.run(
                         url: url,
-                        process: { frame, t in
-                            let snap = engine.process(frame, tMs: t, counting: true)
-                            guard gate.tryEnter() else { return }
-                            Task { @MainActor in self?.snapshot = snap; gate.leave() }
-                        },
+                        process: process,
                         onProgress: { p in
                             guard p >= 1 || pGate.tryEnter() else { return }
                             Task { @MainActor in self?.progress = p; pGate.leave() }
@@ -444,6 +550,8 @@ final class AppModel: ObservableObject {
 
     private func finishSession() {
         guard running else { return }
+        sampleDevice()
+        setResting(false)
         running = false
         countingFlag.value = false
         setScreenAlwaysOn(false)
@@ -464,7 +572,8 @@ final class AppModel: ObservableObject {
             longitude: location?.coordinate.longitude,
             zones: zones,
             events: events,
-            clockStart: clockStart
+            clockStart: clockStart,
+            device: deviceLog
         )
         store.saveThumbnails(record.id, result.thumbnails)
         sessions.insert(record, at: 0)
@@ -610,7 +719,7 @@ final class AppModel: ObservableObject {
             }
             while running { try? await Task.sleep(nanoseconds: 500_000_000) }
 
-            let events = snapshot?.events ?? []
+            let events = liveEvents
             let summary = Summary.of(events, zones: zones).map { Summary.line($0) }.joined(separator: "\n")
             try? CsvExporter.build(sessionName: "autotest", events: events)
                 .write(to: docs.appendingPathComponent("autotest_result.csv"), atomically: true, encoding: .utf8)

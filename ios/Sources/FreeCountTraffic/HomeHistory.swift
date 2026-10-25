@@ -101,6 +101,7 @@ struct SessionDetailView: View {
         var meta = DateFormatter.localizedString(from: r.startedAt, dateStyle: .medium, timeStyle: .short)
         meta += "\nDuration: \(CsvExporter.clock(Int64(r.durationMs))) · \(r.source)"
         if let lat = r.latitude, let lon = r.longitude { meta += String(format: "\nLocation: %.5f, %.5f", lat, lon) }
+        if let device = r.deviceSummary { meta += "\n" + device }
         return meta
     }
 
