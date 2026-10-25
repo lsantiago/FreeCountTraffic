@@ -90,9 +90,9 @@ struct ValidationView: View {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 104), spacing: 10)], spacing: 10) {
                         ForEach(shown, id: \.trackId) { e in tile(e) }
                     }
-                    Text(ficha
-                         ? "Every truck keeps its image; other vehicles only the first \(AnalysisEngine.maxThumbnails) of a session, only on this device."
-                         : "Images are kept for the first \(AnalysisEngine.maxThumbnails) vehicles of a session, only on this device.")
+                    // why some vehicles have no photo (sample, limit), per class
+                    let notes = VehicleClass.allCases.compactMap { c in record?.images?[c.rawValue]?.note(c) }
+                    Text((notes.isEmpty ? "" : notes.joined(separator: "\n") + "\n") + "Photos are kept only on this device.")
                         .font(.caption).foregroundColor(.secondary)
                 }
                 .padding(16)

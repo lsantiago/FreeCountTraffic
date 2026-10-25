@@ -36,10 +36,21 @@ struct SettingsView: View {
                         Label {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("Save Object Images")
-                                Text("For Validate Detections (first 500 per session, kept on this device)")
+                                Text("For Validate Detections, kept on this device")
                                     .font(.caption).foregroundColor(.secondary)
                             }
                         } icon: { Image(systemName: "photo.on.rectangle") }
+                    }
+                    if model.saveImages {
+                        NavigationLink {
+                            ImagesByTypeView()
+                        } label: {
+                            HStack {
+                                Label("Images by Type", systemImage: "square.grid.2x2")
+                                Spacer()
+                                Text(model.imageLimit == 0 ? "No limit" : "\(model.imageLimit) per type").foregroundColor(Theme.orange)
+                            }
+                        }
                     }
 
                     Toggle(isOn: $model.showFps) {
@@ -99,6 +110,44 @@ struct SettingsView: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
         }
+    }
+}
+
+/// Which counted vehicles keep their photo, per class, and the per-class limit.
+struct ImagesByTypeView: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        List {
+            Section(footer: Text("Sample keeps 1 vehicle in every \(ImagePolicy.sampleEvery), spread over the whole session: enough to check the counts without thousands of photos. Photos are written as soon as they are taken.")) {
+                ForEach(VehicleClass.allCases.filter { model.enabledClasses.contains($0) }, id: \.self) { c in
+                    let forced = model.fichaMode && (c == .truck || c == .bus)
+                    Picker(selection: Binding(get: { forced ? .all : model.imagePolicy[c] ?? .all },
+                                              set: { model.imagePolicy[c] = $0 })) {
+                        ForEach(ImagePolicy.allCases, id: \.self) { Text($0.title).tag($0) }
+                    } label: {
+                        HStack(spacing: 12) {
+                            ClassIcon(cls: c, size: 20)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(c.label)
+                                if forced { Text("Always all, no limit (E50 form)").font(.caption).foregroundColor(.secondary) }
+                            }
+                        }
+                    }
+                    .disabled(forced)
+                }
+            }
+            Section(footer: Text("No limit keeps every photo of the session: about 25 KB each, so 4 hours of heavy traffic can take 200 MB. Photos stop if the phone has less than 1 GB free.")) {
+                Picker(selection: $model.imageLimit) {
+                    ForEach(AppModel.imageLimits, id: \.self) { n in Text(n == 0 ? "No limit" : "\(n)").tag(n) }
+                } label: {
+                    Label("Limit per Type", systemImage: "number")
+                }
+            }
+        }
+        .tint(Theme.orange)
+        .navigationTitle("Images by Type")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

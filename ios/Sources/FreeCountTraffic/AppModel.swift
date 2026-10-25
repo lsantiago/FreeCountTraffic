@@ -96,6 +96,26 @@ final class AppModel: ObservableObject {
     @Published var saveImages: Bool = UserDefaults.standard.object(forKey: "saveImages") as? Bool ?? true {
         didSet { UserDefaults.standard.set(saveImages, forKey: "saveImages"); syncEngine() }
     }
+    /// Which photos each class keeps: by default a sample of cars (the most numerous), every other vehicle, no people.
+    @Published var imagePolicy: [VehicleClass: ImagePolicy] = {
+        var out: [VehicleClass: ImagePolicy] = [.car: .sample, .person: .none]
+        let saved = UserDefaults.standard.dictionary(forKey: "imagePolicy") as? [String: String] ?? [:]
+        for (k, v) in saved { if let c = VehicleClass(rawValue: k), let p = ImagePolicy(rawValue: v) { out[c] = p } }
+        return out
+    }() {
+        didSet {
+            UserDefaults.standard.set(Dictionary(uniqueKeysWithValues: imagePolicy.map { ($0.key.rawValue, $0.value.rawValue) }),
+                                      forKey: "imagePolicy")
+            syncEngine()
+        }
+    }
+    /// Photos per class and session (0 = no limit).
+    @Published var imageLimit: Int = UserDefaults.standard.object(forKey: "imageLimit") as? Int ?? 500 {
+        didSet { UserDefaults.standard.set(imageLimit, forKey: "imageLimit"); syncEngine() }
+    }
+    static let imageLimits = [100, 500, 1000, 2000, 0]
+    /// Id of the session in progress (its photos are written under it while counting).
+    private var currentSessionId = UUID()
     @Published var running = false
     @Published var soundOn: Bool = UserDefaults.standard.object(forKey: "soundOn") as? Bool ?? true {
         didSet { UserDefaults.standard.set(soundOn, forKey: "soundOn") }
@@ -224,8 +244,9 @@ final class AppModel: ObservableObject {
     // MARK: boxes
 
     private func syncEngine() {
-        engine.configure(zones: zones, enabled: enabledClasses, confidence: confidence, saveImages: saveImages,
-                         keepTruckImages: fichaMode, studyArea: studyArea)
+        engine.configure(zones: zones, enabled: enabledClasses, confidence: confidence,
+                         images: ImageSettings(on: saveImages, policy: imagePolicy, limit: imageLimit, ficha: fichaMode),
+                         studyArea: studyArea)
         if let data = try? JSONEncoder().encode(zones) { UserDefaults.standard.set(data, forKey: "zones") }
     }
 
@@ -492,6 +513,8 @@ final class AppModel: ObservableObject {
             return
         }
         engine.reset()
+        currentSessionId = UUID()
+        engine.beginImages(store.thumbsDir(currentSessionId))
         startedAt = Date()
         if source != .video {
             clockStart = startedAt
@@ -563,7 +586,7 @@ final class AppModel: ObservableObject {
         if let s = snapshot { snapshot = EngineSnapshot(frame: s.frame, tracks: [], events: events, fps: 0) }
         let name = sessionName.trimmingCharacters(in: .whitespaces)
         let record = SessionRecord(
-            id: UUID(),
+            id: currentSessionId,
             name: name.isEmpty ? "Session " + Self.nameFormatter.string(from: startedAt) : name,
             source: source.rawValue,
             startedAt: startedAt,
@@ -573,13 +596,14 @@ final class AppModel: ObservableObject {
             zones: zones,
             events: events,
             clockStart: clockStart,
-            device: deviceLog
+            device: deviceLog,
+            images: result.images
         )
-        store.saveThumbnails(record.id, result.thumbnails)
         sessions.insert(record, at: 0)
         store.save(sessions)
         lastSessionId = record.id
         message = "Saved \(Summary.unique(events).count) vehicles to History."
+            + (result.lowSpace ? " Photos stopped: less than 1 GB free on the phone." : "")
     }
 
     /// Most recent session saved from the analysis screen (its results can be opened from there).

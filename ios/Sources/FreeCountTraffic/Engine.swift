@@ -26,10 +26,22 @@ struct EngineResult {
     }
 }
 
+/// Which vehicle photos to keep (Settings > Save Object Images).
+struct ImageSettings {
+    var on = true
+    var policy: [VehicleClass: ImagePolicy] = [:]
+    /// Photos per class and session; 0 = no limit.
+    var limit = 500
+    /// E50 form: trucks and buses always keep their photo (they are classified from it), with no limit.
+    var ficha = false
+
+    private func forced(_ c: VehicleClass) -> Bool { ficha && (c == .truck || c == .bus) }
+    func policy(for c: VehicleClass) -> ImagePolicy { forced(c) ? .all : (on ? policy[c] ?? .all : .none) }
+    func limited(_ c: VehicleClass) -> Bool { !forced(c) && limit > 0 }
+}
+
 /// Detector -> tracker -> zone counter pipeline shared by every frame source. Thread-safe.
 final class AnalysisEngine: @unchecked Sendable {
-    /// Like the reference app, only the first 500 vehicle images of a session are kept.
-    static let maxThumbnails = 500
     /// Longest side of a vehicle image: large enough to see the axles of a truck.
     private static let thumbnailSide: CGFloat = 320
 
@@ -40,10 +52,13 @@ final class AnalysisEngine: @unchecked Sendable {
     private let counter = ZoneCounter()
     private var zones: [Zone] = []
     private var enabled: Set<VehicleClass> = [.car, .truck, .bus, .motorcycle]
-    private var saveImages = true
-    /// E50 form: every truck keeps its image (beyond the 500 limit and with images off), since a person classifies
-    /// trucks by axles from it.
-    private var keepTruckImages = false
+    private var images = ImageSettings()
+    private let writer = ThumbnailWriter()
+    /// Vehicles already counted once (their photo decision is taken on their first count).
+    private var seenTracks = Set<Int>()
+    private var vehiclesByClass: [VehicleClass: Int] = [:]
+    private var photosByClass: [VehicleClass: Int] = [:]
+    private var limitReached = Set<VehicleClass>()
     /// Area of study: when set, only this part of the frame is analysed (cut from the full-resolution frame, so
     /// distant vehicles are found more easily).
     private var studyArea: RectN?
@@ -54,7 +69,6 @@ final class AnalysisEngine: @unchecked Sendable {
     /// Time the detector takes per frame (ms, smoothed), for the session's device log.
     private var detectMsEma: Double = 0
     private var trailMap: [Int: [CGPoint]] = [:]
-    private var thumbs: [Int: Data] = [:]
     private let maxTrailPoints = 30
 
     /// Loads (or swaps) the detection model.
@@ -65,14 +79,12 @@ final class AnalysisEngine: @unchecked Sendable {
         detector = fresh
     }
 
-    func configure(zones: [Zone], enabled: Set<VehicleClass>, confidence: Float, saveImages: Bool, keepTruckImages: Bool,
-                   studyArea: RectN?) {
+    func configure(zones: [Zone], enabled: Set<VehicleClass>, confidence: Float, images: ImageSettings, studyArea: RectN?) {
         lock.lock(); defer { lock.unlock() }
         self.zones = zones
         self.studyArea = studyArea
         self.enabled = enabled
-        self.saveImages = saveImages
-        self.keepTruckImages = keepTruckImages
+        self.images = images
         if confidence != self.confidence {
             self.confidence = confidence
             detector?.confidence = confidence
@@ -107,10 +119,21 @@ final class AnalysisEngine: @unchecked Sendable {
         let result = tracker.update(detections, tMs: tMs)
         let produced = counter.update(zones: zones, frameAspect: frame.aspect, active: result.active, removed: result.removed, tMs: tMs)
 
-        for e in produced where thumbs[e.trackId] == nil {
-            guard (saveImages && thumbs.count < Self.maxThumbnails) || (keepTruckImages && e.cls == .truck) else { continue }
+        for e in produced where seenTracks.insert(e.trackId).inserted {
+            let c = e.cls
+            vehiclesByClass[c, default: 0] += 1
+            switch images.policy(for: c) {
+            case .none: continue
+            case .sample: if (vehiclesByClass[c, default: 1] - 1) % ImagePolicy.sampleEvery != 0 { continue }
+            case .all: break
+            }
+            if images.limited(c) && photosByClass[c, default: 0] >= images.limit {
+                limitReached.insert(c)
+                continue
+            }
             if let t = result.active.first(where: { $0.id == e.trackId }), let jpeg = Self.thumbnail(frame, t.box) {
-                thumbs[e.trackId] = jpeg
+                photosByClass[c, default: 0] += 1
+                writer.write(jpeg, track: e.trackId)   // written right away, on the writer's own queue
             }
         }
 
@@ -145,15 +168,27 @@ final class AnalysisEngine: @unchecked Sendable {
         fpsEma = 0
         detectMsEma = 0
         trailMap.removeAll()
-        thumbs.removeAll()
+        seenTracks.removeAll()
+        vehiclesByClass.removeAll()
+        photosByClass.removeAll()
+        limitReached.removeAll()
     }
 
-    /// Adds the speed of vehicles still inside a zone and returns every event of the session, the vehicle images
-    /// and the analysed span in ms.
-    func finish(frameAspect: Float) -> (events: [CountEvent], thumbnails: [Int: Data], spanMs: Int64) {
+    /// Where the photos of the session about to start are written.
+    func beginImages(_ dir: URL) { writer.begin(dir) }
+
+    /// Adds the speed of vehicles still inside a zone and returns every event of the session, its photo counts per
+    /// class, the analysed span in ms and whether photos stopped because the phone ran out of space.
+    func finish(frameAspect: Float) -> (events: [CountEvent], images: [String: ImageStat], spanMs: Int64, lowSpace: Bool) {
         lock.lock(); defer { lock.unlock() }
         counter.finish(zones: zones, frameAspect: frameAspect)
-        return (counter.events, thumbs, lastMs)
+        var stats: [String: ImageStat] = [:]
+        for (c, n) in vehiclesByClass {
+            stats[c.rawValue] = ImageStat(photos: photosByClass[c] ?? 0, vehicles: n, policy: images.policy(for: c),
+                                          limitReached: limitReached.contains(c))
+        }
+        let lowSpace = writer.finish()   // waits for the last photos
+        return (counter.events, stats, lastMs, lowSpace)
     }
 
     /// Crop around the vehicle (with some margin) from the full-resolution frame, at most `thumbnailSide` px, as JPEG.

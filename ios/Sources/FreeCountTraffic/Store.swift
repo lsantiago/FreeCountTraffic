@@ -20,6 +20,8 @@ struct SessionRecord: Codable, Identifiable {
     var ficha: FichaInfo? = nil
     /// Device log while counting (temperature, frame rate, detector time, battery).
     var device: [DeviceSample]? = nil
+    /// Vehicle photos per class (VehicleClass raw value): how many were kept and why some were not.
+    var images: [String: ImageStat]? = nil
 
     var startEpochMs: Int64? { clockStart.map { Int64($0.timeIntervalSince1970 * 1000) } }
 
@@ -35,6 +37,83 @@ struct SessionRecord: Codable, Identifiable {
     var dayOffsetMs: Int64 {
         guard let start = clockStart else { return 0 }
         return Int64(start.timeIntervalSince(Calendar.current.startOfDay(for: start)) * 1000)
+    }
+}
+
+/// Which counted vehicles of a class keep their photo (Settings > Save Object Images > Images by type).
+enum ImagePolicy: String, CaseIterable, Codable {
+    case all, sample, none
+
+    /// "Sample" keeps one vehicle in every `sampleEvery`, spread over the whole session.
+    static let sampleEvery = 5
+
+    var title: String {
+        switch self {
+        case .all: return "All"
+        case .sample: return "Sample 1 of \(Self.sampleEvery)"
+        case .none: return "None"
+        }
+    }
+}
+
+/// Photos of one class in a session.
+struct ImageStat: Codable, Equatable {
+    var photos: Int
+    var vehicles: Int
+    var policy: ImagePolicy
+    /// The per-class limit was reached: later vehicles have no photo.
+    var limitReached: Bool
+
+    /// "Car: sample 1 of 5 · 300 photos of 1500" when some vehicles have no photo, nil when all have one.
+    func note(_ cls: VehicleClass) -> String? {
+        guard photos < vehicles else { return nil }
+        var why: [String] = []
+        if policy != .all { why.append(policy.title.lowercased()) }
+        if limitReached { why.append("limit reached") }
+        return "\(cls.label): " + (why.isEmpty ? "" : why.joined(separator: ", ") + " · ") + "\(photos) photos of \(vehicles)"
+    }
+}
+
+/// Writes vehicle photos as soon as they are taken, on its own queue (the detector never waits for the storage), so
+/// they are not held in memory during long sessions and are kept if the app closes. Stops below 1 GB free.
+final class ThumbnailWriter: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "freecount.thumbs", qos: .utility)
+    private var dir: URL?
+    private var writes = 0
+    private var lowSpace = false
+
+    func begin(_ dir: URL) {
+        queue.async { [self] in
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            self.dir = dir
+            writes = 0
+            lowSpace = false
+        }
+    }
+
+    func write(_ data: Data, track: Int) {
+        queue.async { [self] in
+            guard let dir, !lowSpace else { return }
+            if writes % 25 == 0, let free = Self.freeBytes(), free < 1_000_000_000 {
+                lowSpace = true
+                return
+            }
+            writes += 1
+            try? data.write(to: dir.appendingPathComponent("\(track).jpg"))
+        }
+    }
+
+    /// Waits for the pending photos to be written; true when photos stopped because the phone was running out of space.
+    func finish() -> Bool {
+        queue.sync {
+            dir = nil
+            return lowSpace
+        }
+    }
+
+    private static func freeBytes() -> Int64? {
+        try? URL(fileURLWithPath: NSHomeDirectory()).resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+            .volumeAvailableCapacityForImportantUsage
     }
 }
 
@@ -100,7 +179,13 @@ final class SessionStore {
     init() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         url = docs.appendingPathComponent("sessions.json")
-        thumbsRoot = docs.appendingPathComponent("thumbs", isDirectory: true)
+        var root = docs.appendingPathComponent("thumbs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        // the photos can be many: they stay on the phone, out of its iCloud backup
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? root.setResourceValues(values)
+        thumbsRoot = root
     }
 
     func load() -> [SessionRecord] {
@@ -116,11 +201,9 @@ final class SessionStore {
         if let data = try? encoder.encode(sessions) { try? data.write(to: url, options: .atomic) }
     }
 
-    func saveThumbnails(_ id: UUID, _ thumbs: [Int: Data]) {
-        guard !thumbs.isEmpty else { return }
-        let dir = thumbsRoot.appendingPathComponent(id.uuidString, isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        for (track, data) in thumbs { try? data.write(to: dir.appendingPathComponent("\(track).jpg")) }
+    /// Folder of a session's vehicle photos (written while counting by `ThumbnailWriter`).
+    func thumbsDir(_ id: UUID) -> URL {
+        thumbsRoot.appendingPathComponent(id.uuidString, isDirectory: true)
     }
 
     func thumbnail(_ id: UUID, track: Int) -> UIImage? {
